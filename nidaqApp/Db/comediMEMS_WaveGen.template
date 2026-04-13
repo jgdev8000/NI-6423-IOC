@@ -1,0 +1,82 @@
+# comediMEMS_WaveGen.template
+# Global waveform generator controls
+# Macros: P, R, PORT, ADDR, MAX_POINTS, PREC
+
+record(busy, "$(P)$(R)Run")
+{
+    field(DTYP, "asynInt32")
+    field(OUT,  "@asyn($(PORT),$(ADDR))WAVEGEN_RUN")
+    field(ZNAM, "Stop")
+    field(ONAM, "Run")
+}
+
+record(ao, "$(P)$(R)Frequency")
+{
+    field(PINI, "YES")
+    field(DTYP, "asynFloat64")
+    field(OUT,  "@asyn($(PORT),$(ADDR))WAVEGEN_FREQUENCY")
+    field(VAL,  "1000")
+    field(PREC, "$(PREC)")
+    field(EGU,  "Hz")
+}
+
+record(ai, "$(P)$(R)Dwell")
+{
+    field(DTYP, "asynFloat64")
+    field(INP,  "@asyn($(PORT),$(ADDR))WAVEGEN_DWELL")
+    field(PREC, "$(PREC)")
+    field(EGU,  "s")
+    field(SCAN, "I/O Intr")
+}
+
+record(ai, "$(P)$(R)TotalTime")
+{
+    field(DTYP, "asynFloat64")
+    field(INP,  "@asyn($(PORT),$(ADDR))WAVEGEN_TOTAL_TIME")
+    field(PREC, "$(PREC)")
+    field(EGU,  "s")
+    field(SCAN, "I/O Intr")
+}
+
+record(longout, "$(P)$(R)NumPoints")
+{
+    field(PINI, "YES")
+    field(DTYP, "asynInt32")
+    field(OUT,  "@asyn($(PORT),$(ADDR))WAVEGEN_NUM_POINTS")
+    field(VAL,  "100")
+}
+
+record(longin, "$(P)$(R)CurrentPoint")
+{
+    field(DTYP, "asynInt32")
+    field(INP,  "@asyn($(PORT),$(ADDR))WAVEGEN_CURRENT_POINT")
+    field(SCAN, "I/O Intr")
+}
+
+record(bo, "$(P)$(R)Continuous")
+{
+    field(PINI, "YES")
+    field(DTYP, "asynInt32")
+    field(OUT,  "@asyn($(PORT),$(ADDR))WAVEGEN_CONTINUOUS")
+    field(ZNAM, "One-shot")
+    field(ONAM, "Continuous")
+    field(VAL,  "1")
+}
+
+record(bo, "$(P)$(R)MarkerEnable")
+{
+    field(PINI, "YES")
+    field(DTYP, "asynInt32")
+    field(OUT,  "@asyn($(PORT),$(ADDR))WAVEGEN_MARKER_ENABLE")
+    field(ZNAM, "Disable")
+    field(ONAM, "Enable")
+    field(VAL,  "1")
+}
+
+record(longout, "$(P)$(R)MarkerWidth")
+{
+    field(PINI, "YES")
+    field(DTYP, "asynInt32")
+    field(OUT,  "@asyn($(PORT),$(ADDR))WAVEGEN_MARKER_WIDTH")
+    field(VAL,  "10")
+}

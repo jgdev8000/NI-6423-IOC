@@ -1,0 +1,7 @@
+epicsEnvSet("IOC","iocnidaq")
+epicsEnvSet("TOP","/opt/iocs/nidaq")
+epicsEnvSet("SUPPORT","/opt/epics/synApps/support")
+epicsEnvSet("ASYN","/opt/epics/synApps/support/asyn-R4-42")
+epicsEnvSet("AUTOSAVE","/opt/epics/synApps/support/autosave-R5-10-2")
+epicsEnvSet("BUSY","/opt/epics/synApps/support/busy-R1-7-3")
+epicsEnvSet("EPICS_BASE","/opt/epics/base")

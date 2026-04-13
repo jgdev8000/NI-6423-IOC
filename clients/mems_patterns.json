@@ -1,0 +1,12 @@
+[
+  {
+    "name": "u.csv + v.csv",
+    "ao0": "/home/cxrodev/u.csv",
+    "ao1": "/home/cxrodev/v.csv"
+  },
+  {
+    "name": "x.csv + y.csv",
+    "ao0": "/home/cxrodev/x.csv",
+    "ao1": "/home/cxrodev/y.csv"
+  }
+]

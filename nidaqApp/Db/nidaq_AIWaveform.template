@@ -1,0 +1,62 @@
+# nidaq_AIWaveform.template
+# Hardware-timed AI acquisition (NI-DAQmx USB-6423)
+# Macros: P, R, PORT, ADDR, MAX_POINTS
+
+record(bo, "$(P)$(R)Run")
+{
+    field(DTYP, "asynInt32")
+    field(OUT,  "@asyn($(PORT),$(ADDR))AIACQ_RUN")
+    field(ZNAM, "Stop")
+    field(ONAM, "Acquire")
+}
+
+record(ao, "$(P)$(R)Rate")
+{
+    field(PINI, "YES")
+    field(DTYP, "asynFloat64")
+    field(OUT,  "@asyn($(PORT),$(ADDR))AIACQ_RATE")
+    field(VAL,  "10000")
+    field(PREC, "1")
+    field(EGU,  "Hz")
+}
+
+record(longout, "$(P)$(R)NumPoints")
+{
+    field(PINI, "YES")
+    field(DTYP, "asynInt32")
+    field(OUT,  "@asyn($(PORT),$(ADDR))AIACQ_NUM_POINTS")
+    field(VAL,  "10000")
+}
+
+record(mbbo, "$(P)$(R)TriggerSource")
+{
+    field(PINI, "YES")
+    field(DTYP, "asynInt32")
+    field(OUT,  "@asyn($(PORT),$(ADDR))AIACQ_TRIG_SRC")
+    field(ZRVL, "0")
+    field(ZRST, "Software")
+    field(ONVL, "1")
+    field(ONST, "AO StartTrigger")
+    field(TWVL, "2")
+    field(TWST, "PFI0")
+    field(THVL, "3")
+    field(THST, "PFI1")
+}
+
+record(mbbo, "$(P)$(R)ClockSource")
+{
+    field(PINI, "YES")
+    field(DTYP, "asynInt32")
+    field(OUT,  "@asyn($(PORT),$(ADDR))AIACQ_CLK_SRC")
+    field(ZRVL, "0")
+    field(ZRST, "Internal")
+    field(ONVL, "1")
+    field(ONST, "AO SampleClock")
+}
+
+record(longin, "$(P)$(R)NumAcquired")
+{
+    field(DTYP, "asynInt32")
+    field(INP,  "@asyn($(PORT),$(ADDR))AIACQ_NUM_ACQUIRED")
+    field(SCAN, "I/O Intr")
+}

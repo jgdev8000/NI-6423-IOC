@@ -1,0 +1,12 @@
+# nidaq_AIWaveformN.template
+# Per-channel hardware-timed AI waveform data
+# Macros: P, R, PORT, ADDR, MAX_POINTS
+
+record(waveform, "$(P)$(R)Data")
+{
+    field(FTVL, "DOUBLE")
+    field(DTYP, "asynFloat64ArrayIn")
+    field(INP,  "@asyn($(PORT),$(ADDR))AIACQ_DATA")
+    field(NELM, "$(MAX_POINTS)")
+    field(SCAN, "I/O Intr")
+}

@@ -1,0 +1,40 @@
+# nidaq_WaveGenN.template
+# Per-channel waveform generator controls (NI-DAQmx USB-6423)
+# Macros: P, R, PORT, ADDR, MAX_POINTS, PREC
+
+record(waveform, "$(P)$(R)UserWF")
+{
+    field(FTVL, "DOUBLE")
+    field(DTYP, "asynFloat64ArrayOut")
+    field(INP,  "@asyn($(PORT),$(ADDR))WAVEGEN_USER_WF")
+    field(NELM, "$(MAX_POINTS)")
+}
+
+record(bo, "$(P)$(R)Enable")
+{
+    field(PINI, "YES")
+    field(DTYP, "asynInt32")
+    field(OUT,  "@asyn($(PORT),$(ADDR))WAVEGEN_ENABLE")
+    field(ZNAM, "Disable")
+    field(ONAM, "Enable")
+    field(VAL,  "1")
+}
+
+record(ao, "$(P)$(R)Amplitude")
+{
+    field(PINI, "YES")
+    field(DTYP, "asynFloat64")
+    field(OUT,  "@asyn($(PORT),$(ADDR))WAVEGEN_AMPLITUDE")
+    field(VAL,  "1.0")
+    field(PREC, "4")
+}
+
+record(ao, "$(P)$(R)Offset")
+{
+    field(PINI, "YES")
+    field(DTYP, "asynFloat64")
+    field(OUT,  "@asyn($(PORT),$(ADDR))WAVEGEN_OFFSET")
+    field(VAL,  "0.0")
+    field(PREC, "4")
+    field(EGU,  "V")
+}

@@ -1,0 +1,30 @@
+# nidaq_DIO.template
+# Per-line digital I/O (NI-DAQmx USB-6423)
+# Macros: P, R, PORT, ADDR
+
+record(bo, "$(P)$(R)Out")
+{
+    field(DTYP, "asynInt32")
+    field(OUT,  "@asyn($(PORT),$(ADDR))DIO_OUT")
+    field(ZNAM, "Low")
+    field(ONAM, "High")
+}
+
+record(bi, "$(P)$(R)In")
+{
+    field(DTYP, "asynInt32")
+    field(INP,  "@asyn($(PORT),$(ADDR))DIO_IN")
+    field(ZNAM, "Low")
+    field(ONAM, "High")
+    field(SCAN, "I/O Intr")
+}
+
+record(bo, "$(P)$(R)Direction")
+{
+    field(PINI, "YES")
+    field(DTYP, "asynInt32")
+    field(OUT,  "@asyn($(PORT),$(ADDR))DIO_DIR")
+    field(ZNAM, "Input")
+    field(ONAM, "Output")
+    field(VAL,  "0")
+}

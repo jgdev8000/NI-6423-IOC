@@ -1,0 +1,48 @@
+{
+  "recent": [
+    {
+      "name": "u.csv + v.csv",
+      "ao0": "/home/cxrodev/u.csv",
+      "ao1": "/home/cxrodev/v.csv"
+    },
+    {
+      "name": "x.csv + y.csv",
+      "ao0": "/home/cxrodev/x.csv",
+      "ao1": "/home/cxrodev/y.csv"
+    }
+  ],
+  "settings": {
+    "loop_time_0": ".1",
+    "loop_time_1": "1.0",
+    "trigger_source": 0,
+    "scale_u0": "1",
+    "scale_v0": "1",
+    "offset_u0": "0.0",
+    "offset_v0": "0.0",
+    "filter_enable_0": false,
+    "cutoff_0": "100",
+    "scale_u1": "1.0",
+    "scale_v1": "1.0",
+    "offset_u1": "0.0",
+    "offset_v1": "0.0",
+    "filter_enable_1": false,
+    "cutoff_1": "1000",
+    "last_u0": "/home/cxrodev/u.csv",
+    "last_v0": "/home/cxrodev/v.csv",
+    "last_u1": "",
+    "last_v1": ""
+  },
+  "recent_0_1": [
+    {
+      "name": "u.csv + v.csv",
+      "ao0": "/home/cxrodev/u.csv",
+      "ao1": "/home/cxrodev/v.csv"
+    },
+    {
+      "name": "x.csv + y.csv",
+      "ao0": "/home/cxrodev/x.csv",
+      "ao1": "/home/cxrodev/y.csv"
+    }
+  ],
+  "recent_2_3": []
+}
