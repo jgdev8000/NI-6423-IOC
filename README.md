@@ -87,7 +87,7 @@ Important implementation notes:
 - AO waveform generation supports up to 4 channels and starts whichever channels are enabled.
 - Scalar AI is created for all 32 channels at startup and is updated by a polling thread.
 - Hardware-timed AI acquisition is finite-shot and reads all 32 AI channels into per-channel waveform PVs.
-- DIO and counter records are loaded, but the background monitor threads are currently commented out in the driver constructor. Writes still go through; periodic readback/monitor behavior is therefore incomplete on real hardware.
+- DIO direction, scalar input polling, and counter monitoring are implemented in the active driver.
 
 ## Waveform Generation PVs
 
@@ -172,8 +172,6 @@ Per-line PVs under `MEMS:DIO:<n>:` for `0..15`:
 - `In`
 - `Direction`
 
-Current limitation: the DIO polling thread is disabled in the constructor, so `In` is not being refreshed by the intended background monitor path on real hardware.
-
 ## Counter PVs
 
 Per-counter PVs under `MEMS:Ctr:<n>:` for `0..3`:
@@ -192,8 +190,6 @@ Supported modes in the driver:
 - `Edge Count`
 - `Freq Measure`
 - `Pulse Gen`
-
-Current limitation: the counter monitor thread is disabled in the constructor, so `Count` and `Frequency` do not currently have the intended periodic background updates on real hardware.
 
 ## Client Programs
 
@@ -214,7 +210,12 @@ The GUI contains tabs for:
 - digital I/O
 - counters
 
-The worker code still primarily loads waveform data into `Ch0` and `Ch1`, with optional use of `Ch2` and `Ch3` from the waveform tab.
+Current UI behavior:
+
+- the waveform tab supports two AO pairs: `AO0/AO1` and `AO2/AO3`
+- loading one pair through the per-pair controls disables the other pair
+- the AO, DIO, and counter tabs poll IOC state and sync their controls from live PV values
+- Channel Access write failures are surfaced in the main window status bar
 
 Client-side Python dependencies, based on the checked-in UI code:
 
