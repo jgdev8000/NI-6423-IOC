@@ -339,6 +339,7 @@ class WaveformTab(QWidget):
         self._restore()
         self.w.status_update.connect(self._on_status)
         self.w.load_done.connect(self._on_load_done)
+        self.w.wavegen_state.connect(self._on_wavegen_state)
 
     def _build(self):
         outer = QVBoxLayout(self)
@@ -364,6 +365,24 @@ class WaveformTab(QWidget):
         self.trig_src.addItems(["Software","PFI0","PFI1","PFI2","PFI3","PFI4","PFI5","PFI6","PFI7"])
         top.addWidget(self.trig_src)
         outer.addLayout(top)
+
+        sg = QGroupBox("IOC State")
+        sgl = QGridLayout(); sgl.setSpacing(4); sg.setLayout(sgl)
+        self.state_run = QLabel("--")
+        self.state_channels = QLabel("--")
+        self.state_trigger = QLabel("--")
+        self.state_marker = QLabel("--")
+        self.state_patterns = QLabel("--")
+        self.validation_l = QLabel("Validation: ready")
+        self.validation_l.setStyleSheet("color:#7a8a9a;")
+        self.validation_l.setWordWrap(True)
+        sgl.addWidget(QLabel("Run:"), 0, 0); sgl.addWidget(self.state_run, 0, 1)
+        sgl.addWidget(QLabel("Enabled AO:"), 0, 2); sgl.addWidget(self.state_channels, 0, 3)
+        sgl.addWidget(QLabel("Trigger:"), 1, 0); sgl.addWidget(self.state_trigger, 1, 1)
+        sgl.addWidget(QLabel("Marker:"), 1, 2); sgl.addWidget(self.state_marker, 1, 3)
+        sgl.addWidget(QLabel("Patterns:"), 2, 0); sgl.addWidget(self.state_patterns, 2, 1, 1, 3)
+        sgl.addWidget(self.validation_l, 3, 0, 1, 4)
+        outer.addWidget(sg)
 
         # Main: [controls0] [plot0] [plot1] [controls1]
         main = QHBoxLayout(); main.setSpacing(4)
@@ -391,6 +410,12 @@ class WaveformTab(QWidget):
 
     def _toggle_activate(self, checked):
         if checked:
+            valid, message = self._validate_for_load(require_pair0=False)
+            if not valid:
+                self.activate_btn.setChecked(False)
+                self.validation_l.setText(message)
+                self.validation_l.setStyleSheet("color:#ef5350;")
+                return
             # Activate outputs
             self._outputs_active = True
             self.activate_btn.setText("Outputs ON")
@@ -414,6 +439,14 @@ class WaveformTab(QWidget):
         if u0 is None or v0 is None:
             if not auto_restart:
                 QMessageBox.warning(self, "Missing", "Load AO0/AO1 pattern first.")
+            return
+
+        valid, message = self._validate_for_load(require_pair0=True)
+        self.validation_l.setText(message)
+        self.validation_l.setStyleSheet("color:#66bb6a;" if valid else "color:#ef5350;")
+        if not valid:
+            if not auto_restart:
+                QMessageBox.warning(self, "Invalid waveform setup", message)
             return
 
         # Use pair0's loop time for the hardware clock (all channels share one clock)
@@ -478,6 +511,13 @@ class WaveformTab(QWidget):
         if u is None or v is None:
             if not restart_if_running:
                 QMessageBox.warning(self, "Missing", f"Load AO{pair.ch_a}/AO{pair.ch_b} pattern first.")
+            return
+        valid, message = self._validate_pair(pair)
+        self.validation_l.setText(message)
+        self.validation_l.setStyleSheet("color:#66bb6a;" if valid else "color:#ef5350;")
+        if not valid:
+            if not restart_if_running:
+                QMessageBox.warning(self, "Invalid waveform setup", message)
             return
         freq = 1.0 / lt if lt > 0 else 1.0
         was_running = self._is_running
@@ -548,8 +588,77 @@ class WaveformTab(QWidget):
         self.status_l.setText(text); self._is_running = running
         self.plot0.set_running(running)
         self.plot1.set_running(running)
+        self.w.poll_wavegen_state()
 
     def _on_load_done(self, msg): self.status_l.setText(msg)
+
+    def _on_wavegen_state(self, state):
+        run = state.get("run") or "--"
+        enabled = state.get("enabled", [])
+        trigger_idx = int(state.get("trigger_source") or 0)
+        trigger_names = ["Software","PFI0","PFI1","PFI2","PFI3","PFI4","PFI5","PFI6","PFI7"]
+        trigger = trigger_names[trigger_idx] if 0 <= trigger_idx < len(trigger_names) else str(trigger_idx)
+        marker = "On" if state.get("marker_enable") else "Off"
+        if state.get("marker_enable"):
+            marker += f" ({int(state.get('marker_width') or 0)} samples)"
+
+        enabled_labels = [f"AO{i}" for i, en in enumerate(enabled) if en]
+        self.state_run.setText(run)
+        self.state_run.setStyleSheet(
+            f"font-weight:bold;color:{'#66bb6a' if run == 'Run' else '#ef5350'};")
+        self.state_channels.setText(", ".join(enabled_labels) if enabled_labels else "none")
+        self.state_trigger.setText(trigger)
+        self.state_marker.setText(marker)
+        self.state_patterns.setText(
+            f"AO0/1: {self._pair_summary(self.pair0)} | AO2/3: {self._pair_summary(self.pair1)}")
+
+    def _pair_summary(self, pair):
+        if pair.u_data is None or pair.v_data is None:
+            return "none"
+        src = os.path.basename(pair._u_path) if pair._u_path else "loaded"
+        return f"{src} ({len(pair.u_data)} pts)"
+
+    def _validate_voltage_range(self, u, v, pair):
+        peak = max(float(np.max(np.abs(u))), float(np.max(np.abs(v))))
+        if peak > 10.0:
+            return False, f"AO{pair.ch_a}/AO{pair.ch_b} exceeds +/-10 V after scale/filter ({peak:.3f} V peak)."
+        return True, f"AO{pair.ch_a}/AO{pair.ch_b} validated ({peak:.3f} V peak)."
+
+    def _validate_pair(self, pair):
+        u, v, lt = pair.get_output_data()
+        if u is None or v is None:
+            return False, f"Load AO{pair.ch_a}/AO{pair.ch_b} pattern first."
+        if len(u) != len(v):
+            return False, f"AO{pair.ch_a}/AO{pair.ch_b} X/Y lengths differ."
+        if len(u) < 1 or len(u) > 10000:
+            return False, f"AO{pair.ch_a}/AO{pair.ch_b} must contain 1..10000 points."
+        if lt <= 0:
+            return False, f"AO{pair.ch_a}/AO{pair.ch_b} loop time must be > 0."
+        return self._validate_voltage_range(u, v, pair)
+
+    def _validate_for_load(self, require_pair0=True):
+        pair0_ok, pair0_msg = self._validate_pair(self.pair0)
+        pair1_loaded = self.pair1.u_data is not None and self.pair1.v_data is not None
+
+        if require_pair0 and not pair0_ok:
+            return False, pair0_msg
+
+        if pair1_loaded:
+            pair1_ok, pair1_msg = self._validate_pair(self.pair1)
+            if not pair1_ok:
+                return False, pair1_msg
+            if len(self.pair0.get_output_data()[0]) != len(self.pair1.get_output_data()[0]):
+                return False, "AO0/1 and AO2/3 must have the same number of points when loaded together."
+            lt0 = self.pair0.get_output_data()[2]
+            lt1 = self.pair1.get_output_data()[2]
+            if abs(lt0 - lt1) > 1e-9:
+                return False, "AO0/1 and AO2/3 must use the same loop time when loaded together."
+
+        if pair0_ok and pair1_loaded:
+            return True, "Validation: both AO pairs are consistent and within range."
+        if pair0_ok:
+            return True, "Validation: AO0/1 is ready."
+        return True, "Validation: outputs can be activated; load a pair before starting."
 
     def pulse_glow(self):
         if not self._dialog_open and self._is_running:

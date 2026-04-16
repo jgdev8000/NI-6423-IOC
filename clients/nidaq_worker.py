@@ -11,6 +11,7 @@ class EpicsWorker(QObject):
     load_done = pyqtSignal(str)
     operation_error = pyqtSignal(str)
     ai_update = pyqtSignal(list)
+    ai_acq_update = pyqtSignal(dict)
     ao_state = pyqtSignal(dict)
     dio_update = pyqtSignal(dict)
     ctr_update = pyqtSignal(dict)
@@ -78,6 +79,10 @@ class EpicsWorker(QObject):
                 "num_points": self._get("WaveGen:NumPoints"),
                 "trigger_source": self._get("WaveGen:TriggerSource"),
                 "trigger_edge": self._get("WaveGen:TriggerEdge"),
+                "marker_enable": self._get("WaveGen:MarkerEnable"),
+                "marker_width": self._get("WaveGen:MarkerWidth"),
+                "run": self._get("WaveGen:Run", as_string=True),
+                "enabled": [bool(self._get(f"WaveGen:Ch{i}:Enable")) for i in range(4)],
             }
             self.wavegen_state.emit(state)
         self._bg(_do)
@@ -233,11 +238,41 @@ class EpicsWorker(QObject):
 
     def send_ai_acq(self, rate, npts, trig, clk):
         def _do():
-            self._put("AIAcq:Rate", rate)
-            self._put("AIAcq:NumPoints", npts)
-            self._put("AIAcq:TriggerSource", trig)
-            self._put("AIAcq:ClockSource", clk)
-            self._put("AIAcq:Run", 1)
+            ok = True
+            ok = self._put("AIAcq:Rate", rate) and ok
+            ok = self._put("AIAcq:NumPoints", npts) and ok
+            ok = self._put("AIAcq:TriggerSource", trig) and ok
+            ok = self._put("AIAcq:ClockSource", clk) and ok
+            ok = self._put("AIAcq:Run", 1) and ok
+            if not ok:
+                return
+
+            import time
+            deadline = time.time() + max(5.0, float(npts) / max(float(rate), 1.0) + 5.0)
+            acquired = 0
+            while time.time() < deadline:
+                run = self._get("AIAcq:Run")
+                acquired = int(self._get("AIAcq:NumAcquired") or 0)
+                if not run:
+                    break
+                time.sleep(0.2)
+
+            channel_data = []
+            for ch in range(32):
+                data = self._get(f"AIAcq:{ch}:Data")
+                if data is not None and hasattr(data, "__len__"):
+                    channel_data.append(list(data[:acquired] if acquired > 0 else data))
+                else:
+                    channel_data.append([])
+
+            self.ai_acq_update.emit({
+                "rate": float(rate),
+                "num_points": int(npts),
+                "num_acquired": acquired,
+                "trigger_source": int(trig),
+                "clock_source": int(clk),
+                "channels": channel_data,
+            })
         self._bg(_do)
 
     def send_trigger(self, src, edge):
