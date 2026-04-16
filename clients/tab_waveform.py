@@ -74,25 +74,32 @@ class PairControls(QWidget):
         self.setMaximumWidth(300)
         self._build(color_a, color_b)
 
-        self._recent = []
-        self._recent_key = f"recent_{self.ch_a}_{self.ch_b}"
+        self._patterns = []
+        self._pattern_folder = ""
 
     def _build(self, ca, cb):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0,0,0,0); layout.setSpacing(3)
 
-        # Recent
-        rg = QGroupBox("Recent")
-        rl = QHBoxLayout(); rl.setSpacing(2); rg.setLayout(rl)
-        self.combo = QComboBox(); self.combo.setStyleSheet("font-size:10px;")
-        self.combo.currentIndexChanged.connect(self._on_recent)
-        rl.addWidget(self.combo)
-        db = QPushButton("X"); db.setFixedSize(20, 20)
-        db.setStyleSheet("font-size:9px;padding:0;font-weight:bold;color:#ef5350;")
-        db.clicked.connect(self._del_recent); rl.addWidget(db)
-        layout.addWidget(rg, stretch=1)
+        # Pattern library
+        pg = QGroupBox("Pattern Library")
+        pl = QVBoxLayout(); pl.setSpacing(2); pg.setLayout(pl)
 
-        # Files
+        # Folder selector
+        frow = QHBoxLayout(); frow.setSpacing(2)
+        self.folder_l = QLabel("(no folder)"); self.folder_l.setStyleSheet("font-size:9px;color:#7a8a9a;")
+        frow.addWidget(self.folder_l, stretch=1)
+        fb = QPushButton("Folder..."); fb.setStyleSheet("font-size:10px;padding:2px;")
+        fb.clicked.connect(self._browse_folder); frow.addWidget(fb)
+        pl.addLayout(frow)
+
+        # Pattern dropdown
+        self.pattern_combo = QComboBox(); self.pattern_combo.setStyleSheet("font-size:10px;")
+        self.pattern_combo.currentIndexChanged.connect(self._on_pattern_selected)
+        pl.addWidget(self.pattern_combo)
+        layout.addWidget(pg, stretch=1)
+
+        # Manual file browse (fallback)
         fg = QGroupBox(f"AO{self.ch_a} / AO{self.ch_b}")
         g = QGridLayout(); g.setSpacing(2); fg.setLayout(g)
 
@@ -165,52 +172,94 @@ class PairControls(QWidget):
 
     def _start_pair(self):
         """Load this pair's data and start."""
+        if not self.tab._outputs_active:
+            QMessageBox.warning(self, "Outputs disabled",
+                "Turn on 'Outputs ON' before starting.")
+            return
         self.tab._load_pair(self, restart_if_running=False)
 
     def _stop_pair(self):
         self.tab._stop()
 
-    # --- Recent pattern management (per-pair) ---
-    def load_recent_list(self, recent_list):
-        self._recent = recent_list
-        self._refresh_combo()
+    # --- Pattern library ---
+    def _scan_folder(self, folder):
+        """Scan folder for *X.csv/*Y.csv pairs and .mat files."""
+        self._patterns = []
+        self._pattern_folder = folder
+        if not folder or not os.path.isdir(folder):
+            return
+        files = os.listdir(folder)
 
-    def _refresh_combo(self):
-        self.combo.blockSignals(True); self.combo.clear()
-        self.combo.addItem("(select)")
-        for e in self._recent: self.combo.addItem(e.get("name","?"))
-        self.combo.setCurrentIndex(0); self.combo.blockSignals(False)
+        # Find *X.csv / *Y.csv pairs
+        x_files = sorted([f for f in files if f.endswith('X.csv')])
+        for xf in x_files:
+            name = xf[:-5]  # strip 'X.csv'
+            yf = name + 'Y.csv'
+            if yf in files:
+                self._patterns.append({
+                    "name": name,
+                    "ao0": os.path.join(folder, xf),
+                    "ao1": os.path.join(folder, yf),
+                    "type": "csv"
+                })
 
-    def _on_recent(self, idx):
-        if idx <= 0: return
-        e = self._recent[idx-1]; a=e["ao0"]; b=e["ao1"]
-        if not os.path.isfile(a):
-            QMessageBox.warning(self,"Not found",a); return
-        self._u_path=a; self._v_path=b
-        if a.endswith('.mat'):
-            try: self.u_data, self.v_data = load_mat_pattern(a)
-            except: return
-            self.ul.setText(os.path.basename(a)+" [0]")
-            self.vl.setText(os.path.basename(a)+" [1]")
+        # Find .mat files
+        for f in sorted(files):
+            if f.endswith('.mat'):
+                self._patterns.append({
+                    "name": f[:-4],
+                    "ao0": os.path.join(folder, f),
+                    "ao1": os.path.join(folder, f),
+                    "type": "mat"
+                })
+
+        self._refresh_pattern_combo()
+
+    def _refresh_pattern_combo(self):
+        self.pattern_combo.blockSignals(True)
+        self.pattern_combo.clear()
+        self.pattern_combo.addItem("(select pattern)")
+        for p in self._patterns:
+            pts_label = ""
+            self.pattern_combo.addItem(p["name"])
+        self.pattern_combo.setCurrentIndex(0)
+        self.pattern_combo.blockSignals(False)
+
+    def _browse_folder(self):
+        self.tab._dialog_open = True
+        try:
+            folder = QFileDialog.getExistingDirectory(self, "Select Pattern Folder")
+        finally:
+            self.tab._dialog_open = False
+        if folder:
+            self.folder_l.setText(os.path.basename(folder))
+            self._scan_folder(folder)
+            self.tab._save_config()
+
+    def _on_pattern_selected(self, idx):
+        if idx <= 0 or idx > len(self._patterns): return
+        p = self._patterns[idx - 1]
+        if p["type"] == "mat":
+            try:
+                self.u_data, self.v_data = load_mat_pattern(p["ao0"])
+                self._u_path = self._v_path = p["ao0"]
+                self.ul.setText(p["name"] + " [X]")
+                self.vl.setText(p["name"] + " [Y]")
+            except Exception as e:
+                QMessageBox.critical(self, "Error", str(e)); return
         else:
-            if not os.path.isfile(b): return
-            self.ul.setText(os.path.basename(a))
-            self.vl.setText(os.path.basename(b))
-            self.u_data=np.loadtxt(a); self.v_data=np.loadtxt(b)
+            self._u_path = p["ao0"]; self._v_path = p["ao1"]
+            self.u_data = np.loadtxt(p["ao0"]); self.v_data = np.loadtxt(p["ao1"])
+            self.ul.setText(os.path.basename(p["ao0"]))
+            self.vl.setText(os.path.basename(p["ao1"]))
         self._preview()
 
-    def _del_recent(self):
-        i = self.combo.currentIndex()
-        if i <= 0: return
-        del self._recent[i-1]
-        self.tab._save_config(); self._refresh_combo()
-
-    def add_recent(self, ao0, ao1):
-        name = f"{os.path.basename(ao0)} + {os.path.basename(ao1)}"
-        self._recent = [e for e in self._recent if not(e["ao0"]==ao0 and e["ao1"]==ao1)]
-        self._recent.insert(0, {"name":name,"ao0":ao0,"ao1":ao1})
-        self._recent = self._recent[:20]
-        self.tab._save_config(); self._refresh_combo()
+    def set_folder(self, folder):
+        """Set pattern folder (called from restore)."""
+        if folder and os.path.isdir(folder):
+            self._pattern_folder = folder
+            self.folder_l.setText(os.path.basename(folder))
+            self._scan_folder(folder)
 
     def _dlg(self, title, filt="CSV (*.csv);;All (*)"):
         self.tab._dialog_open = True
@@ -245,7 +294,8 @@ class PairControls(QWidget):
     def _apply(self):
         self._preview()
         # Reload data to IOC with new settings, restart if was running
-        self.tab._load_pair(self, restart_if_running=True)
+        if self.tab._outputs_active:
+            self.tab._load_pair(self, restart_if_running=True)
 
     def _get_params(self):
         try: su=float(self.su.text() or 1)
@@ -294,8 +344,20 @@ class WaveformTab(QWidget):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(4,4,4,4); outer.setSpacing(4)
 
-        # Top bar: trigger
+        # Top bar: activate toggle + trigger
         top = QHBoxLayout(); top.setSpacing(6)
+
+        self.activate_btn = QPushButton("Outputs OFF")
+        self.activate_btn.setCheckable(True)
+        self.activate_btn.setChecked(False)
+        self._outputs_active = False
+        self.activate_btn.setStyleSheet(
+            "QPushButton{background:#b71c1c;color:#ffcdd2;font-weight:bold;"
+            "padding:6px 16px;font-size:12px;border:1px solid #c62828;border-radius:4px;}"
+            "QPushButton:checked{background:#1b5e20;color:#c8e6c9;border-color:#2e7d32;}")
+        self.activate_btn.clicked.connect(self._toggle_activate)
+        top.addWidget(self.activate_btn)
+
         top.addStretch()
         top.addWidget(QLabel("Trigger:"))
         self.trig_src = QComboBox()
@@ -326,6 +388,18 @@ class WaveformTab(QWidget):
         self.status_l.setFont(QFont("Consolas", 8))
         self.status_l.setStyleSheet("color:#7a8a9a;padding:2px;")
         outer.addWidget(self.status_l)
+
+    def _toggle_activate(self, checked):
+        if checked:
+            # Activate outputs
+            self._outputs_active = True
+            self.activate_btn.setText("Outputs ON")
+            self.status_l.setText("Outputs activated — ready")
+        else:
+            # Deactivate: stop and center
+            self._outputs_active = False
+            self.activate_btn.setText("Outputs OFF")
+            self._stop()
 
     def _preview(self):
         u0, v0, _ = self.pair0.get_output_data()
@@ -394,10 +468,8 @@ class WaveformTab(QWidget):
                     self.w.load_done.emit(f"Loaded {n} pts. Press Start.")
         threading.Thread(target=_send, daemon=True).start()
 
-        if self.pair0._u_path and self.pair0._v_path:
-            self.pair0.add_recent(self.pair0._u_path, self.pair0._v_path)
-        if self.pair1._u_path and self.pair1._v_path:
-            self.pair1.add_recent(self.pair1._u_path, self.pair1._v_path)
+        # Save config after loading
+        self._save_config()
 
     def _load_pair(self, pair, restart_if_running=False):
         """Load a single pair's data to IOC. Optionally restart if was running."""
@@ -442,7 +514,27 @@ class WaveformTab(QWidget):
                     self.w.load_done.emit(f"Loaded {n} pts. Press Start.")
         threading.Thread(target=_send, daemon=True).start()
 
-    def _stop(self): self.w.send_stop()
+    def _stop(self):
+        """Stop output and return all AO channels to 0V (center)."""
+        def _do():
+            self.w._put("WaveGen:Run", 0)
+            import time; time.sleep(0.2)
+            # Write single-point zero waveform to park at center
+            import numpy as np
+            zero = np.array([0.0], dtype=np.float64)
+            self.w._put("WaveGen:NumPoints", 1)
+            for ch in range(4):
+                self.w._put(f"WaveGen:Ch{ch}:UserWF", zero)
+                self.w._put(f"WaveGen:Ch{ch}:Amplitude", 1.0)
+                self.w._put(f"WaveGen:Ch{ch}:Offset", 0.0)
+            # Run once to output the zero value, then stop
+            self.w._put("WaveGen:Continuous", 0)
+            self.w._put("WaveGen:Run", 1)
+            time.sleep(0.1)
+            self.w._put("WaveGen:Run", 0)
+            self.w.load_done.emit("Stopped — centered at 0V")
+        import threading
+        threading.Thread(target=_do, daemon=True).start()
 
     def _on_status(self, text, running, curpt):
         self.status_l.setText(text); self._is_running = running
@@ -462,9 +554,9 @@ class WaveformTab(QWidget):
             try:
                 with open(self.cfg_path) as f: cfg=json.load(f)
             except: cfg={}
-            cfg["recent_0_1"]=self.pair0._recent
-            cfg["recent_2_3"]=self.pair1._recent
             cfg["settings"]={
+                "pattern_folder_0":self.pair0._pattern_folder,
+                "pattern_folder_1":self.pair1._pattern_folder,
                 "loop_time_0":self.pair0.loop_e.text(),
                 "loop_time_1":self.pair1.loop_e.text(),
                 "trigger_source":self.trig_src.currentIndex(),
@@ -485,11 +577,11 @@ class WaveformTab(QWidget):
         try:
             with open(self.cfg_path) as f: cfg = json.load(f)
         except: cfg = {}
-        # Load recent lists for each pair
-        self.pair0.load_recent_list(cfg.get("recent_0_1", cfg.get("recent", [])))
-        self.pair1.load_recent_list(cfg.get("recent_2_3", []))
         s = cfg.get("settings", {})
         if not s: return
+        # Restore pattern folders
+        self.pair0.set_folder(s.get("pattern_folder_0", ""))
+        self.pair1.set_folder(s.get("pattern_folder_1", ""))
         self.pair0.loop_e.setText(s.get("loop_time_0", s.get("loop_time","1.0")))
         self.pair1.loop_e.setText(s.get("loop_time_1","1.0"))
         self.trig_src.setCurrentIndex(int(s.get("trigger_source",0)))
