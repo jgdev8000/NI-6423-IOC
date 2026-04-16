@@ -42,7 +42,7 @@ drvNiDAQMEMS::drvNiDAQMEMS(const char *portName, const char *daqmxDevice,
       maxPoints_(maxPoints), simMode_(0),
       aoTask_(0), doTask_(0), aoBuffer_(NULL), doBuffer_(NULL),
       waveGenRunning_(0), aoMonitorThreadId_(0), aoMonitorRunning_(1),
-      aiTask_(0), aiThreadId_(0), aiRunning_(1),
+      aiTask_(0), aiTaskMutex_(epicsMutexMustCreate()), aiThreadId_(0), aiRunning_(1),
       aiAcqTask_(0), aiAcqBuffer_(NULL), aiAcqRunning_(0),
       dioReadTask_(0), dioThreadId_(0), dioRunning_(1),
       ctrThreadId_(0), ctrRunning_(1)
@@ -173,15 +173,11 @@ drvNiDAQMEMS::drvNiDAQMEMS(const char *portName, const char *daqmxDevice,
                 driverName, functionName, devName_);
         }
 
-        char aiChanSpec[128];
-        snprintf(aiChanSpec, sizeof(aiChanSpec), "%s/ai0:%d", devName_, MAX_AI_CHANNELS - 1);
-        ret = DAQmxCreateTask("memsAI", &aiTask_);
-        if (ret >= 0) {
-            ret = DAQmxCreateAIVoltageChan(aiTask_, aiChanSpec, "",
-                DAQmx_Val_Cfg_Default, -10.0, 10.0, DAQmx_Val_Volts, NULL);
+        if (recreatePolledAITask() < 0) {
+            asynPrint(pasynUserSelf, ASYN_TRACE_ERROR,
+                "%s:%s: failed to create polled AI task\n",
+                driverName, functionName);
         }
-        if (ret >= 0) ret = DAQmxStartTask(aiTask_);
-        if (ret < 0) reportDAQmxError(ret, functionName);
     }
 
     for (int i = 0; i < MAX_ADDR; i++) callParamCallbacks(i);
@@ -194,11 +190,10 @@ drvNiDAQMEMS::drvNiDAQMEMS(const char *portName, const char *daqmxDevice,
         epicsThreadGetStackSize(epicsThreadStackMedium), aiThreadC, this);
     aoMonitorThreadId_ = epicsThreadCreate("nidaqAOMon", epicsThreadPriorityMedium,
         epicsThreadGetStackSize(epicsThreadStackMedium), aoMonitorThreadC, this);
-    /* DIO and counter threads temporarily disabled for debugging */
-    /* dioThreadId_ = epicsThreadCreate("nidaqDIO", epicsThreadPriorityLow,
+    dioThreadId_ = epicsThreadCreate("nidaqDIO", epicsThreadPriorityLow,
         epicsThreadGetStackSize(epicsThreadStackMedium), dioThreadC, this);
     ctrThreadId_ = epicsThreadCreate("nidaqCTR", epicsThreadPriorityLow,
-        epicsThreadGetStackSize(epicsThreadStackMedium), ctrThreadC, this); */
+        epicsThreadGetStackSize(epicsThreadStackMedium), ctrThreadC, this);
 
     asynPrint(pasynUserSelf, ASYN_TRACE_FLOW,
         "%s:%s: initialized %s — 4 AO, 32 AI, 16 DIO, 4 counters\n",
@@ -215,7 +210,9 @@ drvNiDAQMEMS::~drvNiDAQMEMS()
     stopAIAcq();
     for (int i = 0; i < MAX_COUNTERS; i++) stopCounter(i);
     if (!simMode_) {
+        epicsMutexMustLock(aiTaskMutex_);
         if (aiTask_) { DAQmxStopTask(aiTask_); DAQmxClearTask(aiTask_); }
+        epicsMutexUnlock(aiTaskMutex_);
         if (aoTask_) DAQmxClearTask(aoTask_);
         if (doTask_) DAQmxClearTask(doTask_);
         if (dioReadTask_) { DAQmxStopTask(dioReadTask_); DAQmxClearTask(dioReadTask_); }
@@ -230,16 +227,90 @@ drvNiDAQMEMS::~drvNiDAQMEMS()
 /*  AO Waveform Generation (hardware-timed)                            */
 /* ================================================================== */
 
-void drvNiDAQMEMS::buildAOBuffer(int numPoints, int numChans)
+void drvNiDAQMEMS::buildAOBuffer(int numPoints, int numChans, const int *chanIdx)
 {
-    for (int ch = 0; ch < numChans; ch++) {
+    for (int bufCh = 0; bufCh < numChans; bufCh++) {
+        int hwCh = chanIdx[bufCh];
         epicsFloat64 amplitude, offset;
-        getDoubleParam(ch, P_WaveGenAmplitude, &amplitude);
-        getDoubleParam(ch, P_WaveGenOffset, &offset);
+        getDoubleParam(hwCh, P_WaveGenAmplitude, &amplitude);
+        getDoubleParam(hwCh, P_WaveGenOffset, &offset);
         for (int j = 0; j < numPoints; j++) {
-            aoBuffer_[j * numChans + ch] = userWF_[ch][j] * amplitude + offset;
+            aoBuffer_[j * numChans + bufCh] = userWF_[hwCh][j] * amplitude + offset;
         }
     }
+}
+
+void drvNiDAQMEMS::getAIRangeLimits(int range, float64 *minVal, float64 *maxVal) const
+{
+    switch (range) {
+    case 1:
+        *minVal = -5.0;
+        *maxVal = 5.0;
+        break;
+    case 2:
+        *minVal = -0.5;
+        *maxVal = 0.5;
+        break;
+    case 3:
+        *minVal = -0.05;
+        *maxVal = 0.05;
+        break;
+    case 0:
+    default:
+        *minVal = -10.0;
+        *maxVal = 10.0;
+        break;
+    }
+}
+
+int drvNiDAQMEMS::configureAIChannels(TaskHandle task)
+{
+    static const char *functionName = "configureAIChannels";
+
+    for (int ch = 0; ch < MAX_AI_CHANNELS; ch++) {
+        char aiChanSpec[128];
+        int range = 0;
+        float64 minVal, maxVal;
+
+        getIntegerParam(ch, P_AIRange, &range);
+        getAIRangeLimits(range, &minVal, &maxVal);
+        snprintf(aiChanSpec, sizeof(aiChanSpec), "%s/ai%d", devName_, ch);
+
+        int32 ret = DAQmxCreateAIVoltageChan(task, aiChanSpec, "",
+            DAQmx_Val_Cfg_Default, minVal, maxVal, DAQmx_Val_Volts, NULL);
+        if (ret < 0) {
+            reportDAQmxError(ret, functionName);
+            return -1;
+        }
+    }
+
+    return 0;
+}
+
+int drvNiDAQMEMS::recreatePolledAITask()
+{
+    static const char *functionName = "recreatePolledAITask";
+
+    if (simMode_) return 0;
+
+    epicsMutexMustLock(aiTaskMutex_);
+    if (aiTask_) {
+        DAQmxStopTask(aiTask_);
+        DAQmxClearTask(aiTask_);
+        aiTask_ = 0;
+    }
+
+    int32 ret = DAQmxCreateTask("memsAI", &aiTask_);
+    if (ret >= 0) ret = configureAIChannels(aiTask_);
+    if (ret >= 0) ret = DAQmxStartTask(aiTask_);
+    epicsMutexUnlock(aiTaskMutex_);
+
+    if (ret < 0) {
+        reportDAQmxError(ret, functionName);
+        return -1;
+    }
+
+    return 0;
 }
 
 int drvNiDAQMEMS::startWaveGen()
@@ -285,16 +356,17 @@ int drvNiDAQMEMS::startWaveGen()
     }
 
     /* Build channel spec */
-    char aoChanSpec[128];
-    if (numChans == 1) {
-        snprintf(aoChanSpec, sizeof(aoChanSpec), "%s/ao%d", devName_, chanIdx[0]);
-    } else {
-        snprintf(aoChanSpec, sizeof(aoChanSpec), "%s/ao%d:%d",
-                 devName_, chanIdx[0], chanIdx[numChans - 1]);
+    char aoChanSpec[256];
+    aoChanSpec[0] = '\0';
+    for (int c = 0; c < numChans; c++) {
+        char chanName[64];
+        snprintf(chanName, sizeof(chanName), "%s%s/ao%d",
+                 c ? "," : "", devName_, chanIdx[c]);
+        strncat(aoChanSpec, chanName, sizeof(aoChanSpec) - strlen(aoChanSpec) - 1);
     }
 
     double requestedSampleRate = frequency * numPoints;
-    buildAOBuffer(numPoints, numChans);
+    buildAOBuffer(numPoints, numChans, chanIdx);
 
     double actualSampleRate = requestedSampleRate;
     double dwell, actualFrequency;
@@ -492,8 +564,14 @@ void drvNiDAQMEMS::aiThread()
             unlock();
             simTime += scanPeriod;
         } else {
-            int32 ret = DAQmxReadAnalogF64(aiTask_, 1, 1.0,
-                DAQmx_Val_GroupByChannel, data, MAX_AI_CHANNELS, &read, NULL);
+            epicsMutexMustLock(aiTaskMutex_);
+            TaskHandle aiTask = aiTask_;
+            int32 ret = -1;
+            if (aiTask) {
+                ret = DAQmxReadAnalogF64(aiTask, 1, 1.0,
+                    DAQmx_Val_GroupByChannel, data, MAX_AI_CHANNELS, &read, NULL);
+            }
+            epicsMutexUnlock(aiTaskMutex_);
             if (ret >= 0 && read > 0) {
                 lock();
                 for (int ch = 0; ch < MAX_AI_CHANNELS; ch++) {
@@ -550,19 +628,16 @@ int drvNiDAQMEMS::startAIAcq()
     }
 
     /* Must stop polled AI while acquisition runs (same physical channels) */
+    epicsMutexMustLock(aiTaskMutex_);
     if (aiTask_) { DAQmxStopTask(aiTask_); }
+    epicsMutexUnlock(aiTaskMutex_);
 
     if (aiAcqTask_) { DAQmxClearTask(aiAcqTask_); aiAcqTask_ = 0; }
-
-    char aiChanSpec[128];
-    snprintf(aiChanSpec, sizeof(aiChanSpec), "%s/ai0:%d", devName_, MAX_AI_CHANNELS - 1);
 
     ret = DAQmxCreateTask("memsAIAcq", &aiAcqTask_);
     if (ret < 0) { reportDAQmxError(ret, functionName); return -1; }
 
-    ret = DAQmxCreateAIVoltageChan(aiAcqTask_, aiChanSpec, "",
-        DAQmx_Val_Cfg_Default, -10.0, 10.0, DAQmx_Val_Volts, NULL);
-    if (ret < 0) { reportDAQmxError(ret, functionName); return -1; }
+    if (configureAIChannels(aiAcqTask_) < 0) return -1;
 
     /* Clock source */
     const char *clkSource = "";
@@ -615,7 +690,9 @@ int drvNiDAQMEMS::startAIAcq()
     aiAcqTask_ = 0;
 
     /* Restart polled AI */
+    epicsMutexMustLock(aiTaskMutex_);
     if (aiTask_) DAQmxStartTask(aiTask_);
+    epicsMutexUnlock(aiTaskMutex_);
 
     aiAcqRunning_ = 0;
     lock();
@@ -635,7 +712,9 @@ int drvNiDAQMEMS::stopAIAcq()
     }
     aiAcqRunning_ = 0;
     /* Restart polled AI */
+    epicsMutexMustLock(aiTaskMutex_);
     if (aiTask_) DAQmxStartTask(aiTask_);
+    epicsMutexUnlock(aiTaskMutex_);
     return 0;
 }
 
@@ -879,6 +958,11 @@ asynStatus drvNiDAQMEMS::writeInt32(asynUser *pasynUser, epicsInt32 value)
         }
     }
     else if (function == P_DIOOut) {
+        int dir = 0;
+        getIntegerParam(addr, P_DIODir, &dir);
+        if (!dir) {
+            return asynError;
+        }
         if (!simMode_) {
             char lineName[128];
             snprintf(lineName, sizeof(lineName), "%s/port0/line%d", devName_, addr);
@@ -896,6 +980,19 @@ asynStatus drvNiDAQMEMS::writeInt32(asynUser *pasynUser, epicsInt32 value)
             if (ret < 0) { reportDAQmxError(ret, "writeInt32:DIO"); status = asynError; }
         }
         setIntegerParam(addr, P_DIOOut, value);
+        setIntegerParam(addr, P_DIOIn, value);
+    }
+    else if (function == P_DIODir) {
+        if (addr >= 0 && addr < MAX_DIO_LINES) {
+            setIntegerParam(addr, P_DIODir, value ? 1 : 0);
+            if (!value) {
+                setIntegerParam(addr, P_DIOIn, 0);
+            } else {
+                int out = 0;
+                getIntegerParam(addr, P_DIOOut, &out);
+                setIntegerParam(addr, P_DIOIn, out);
+            }
+        }
     }
     else if (function == P_CtrMode) {
         if (addr >= 0 && addr < MAX_COUNTERS) {
@@ -927,6 +1024,14 @@ asynStatus drvNiDAQMEMS::writeInt32(asynUser *pasynUser, epicsInt32 value)
                 if (ctrTask_[addr]) DAQmxStopTask(ctrTask_[addr]);
             }
             setIntegerParam(addr, P_CtrPulseRun, value);
+        }
+    }
+    else if (function == P_AIRange) {
+        if (addr >= 0 && addr < MAX_AI_CHANNELS) {
+            setIntegerParam(addr, P_AIRange, value);
+            if (!simMode_ && recreatePolledAITask() < 0) {
+                status = asynError;
+            }
         }
     }
     else {

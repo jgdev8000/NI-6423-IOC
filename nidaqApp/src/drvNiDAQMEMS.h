@@ -10,6 +10,7 @@
 
 #include <NIDAQmx.h>
 #include <asynPortDriver.h>
+#include <epicsMutex.h>
 #include <epicsThread.h>
 
 /* --- Waveform generator (global) --- */
@@ -151,16 +152,20 @@ private:
 
     int startWaveGen();
     int stopWaveGen();
-    void buildAOBuffer(int numPoints, int numChans);
+    void buildAOBuffer(int numPoints, int numChans, const int *chanIdx);
     static void aoMonitorThreadC(void *drvPvt);
     void aoMonitorThread();
 
     /* --- AI polled --- */
     TaskHandle aiTask_;
+    epicsMutexId aiTaskMutex_;
     epicsThreadId aiThreadId_;
     int aiRunning_;
     static void aiThreadC(void *drvPvt);
     void aiThread();
+    int configureAIChannels(TaskHandle task);
+    int recreatePolledAITask();
+    void getAIRangeLimits(int range, float64 *minVal, float64 *maxVal) const;
 
     /* --- AI acquisition (HW-timed) --- */
     /* Note: aiAcqTask_ declared after maxPoints_ to match init order */
