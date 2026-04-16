@@ -67,9 +67,7 @@ class MainWindow(QMainWindow):
         cfg_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mems_settings.json")
 
         self.worker = EpicsWorker()
-
-        # Stop any running output on startup
-        self.worker.send_stop()
+        self.worker.operation_error.connect(self._show_error)
 
         tabs = QTabWidget()
         self.wf_tab = WaveformTab(self.worker, cfg_path)
@@ -104,6 +102,9 @@ class MainWindow(QMainWindow):
         elif idx == 2: self.ai_tab.poll()
         elif idx == 3: self.dio_tab.poll()
         elif idx == 4: self.ctr_tab.poll()
+
+    def _show_error(self, message):
+        self.statusBar().showMessage(message, 5000)
 
     def closeEvent(self, event):
         self.poll_timer.stop()

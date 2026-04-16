@@ -1,8 +1,8 @@
 """Analog Output tab — shows state of all 4 AO channels from IOC."""
-import os, threading, numpy as np
+import numpy as np
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QGroupBox, QLabel, QPushButton)
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
@@ -65,6 +65,7 @@ class AOTab(QWidget):
     def __init__(self, worker):
         super().__init__()
         self.w = worker
+        self.w.ao_state.connect(self._on_ao_state)
         self._build()
 
     def _build(self):
@@ -127,50 +128,40 @@ class AOTab(QWidget):
         main.addWidget(self.plot, stretch=2)
 
     def poll(self):
-        """Read IOC state in background and update display."""
-        def _do():
-            run = self.w._get("WaveGen:Run", as_string=True)
-            freq = self.w._get("WaveGen:Frequency")
-            npts = self.w._get("WaveGen:NumPoints")
+        self.w.poll_ao()
 
-            channels = []
-            enabled = []
-            for i in range(4):
-                en = self.w._get(f"WaveGen:Ch{i}:Enable")
-                amp = self.w._get(f"WaveGen:Ch{i}:Amplitude")
-                off = self.w._get(f"WaveGen:Ch{i}:Offset")
-                enabled.append(bool(en))
+    def _on_ao_state(self, state):
+        freq = state["frequency"]
+        npts = state["num_points"]
+        enabled = state["enabled"]
+        channels = []
 
-                # Read waveform data from IOC
-                wf = self.w._get(f"WaveGen:Ch{i}:UserWF")
-                if wf is not None and hasattr(wf, '__len__') and len(wf) > 0:
-                    # Apply amplitude and offset as the IOC would
-                    n = int(npts) if npts else len(wf)
-                    data = np.array(wf[:n]) * float(amp or 1) + float(off or 0)
-                    channels.append(data)
-                else:
-                    channels.append(None)
+        for i, wf in enumerate(state["channels"]):
+            card_state = state["cards"][i]
+            amp = card_state["amplitude"]
+            off = card_state["offset"]
+            if wf is not None and hasattr(wf, "__len__") and len(wf) > 0:
+                n = npts if npts else len(wf)
+                data = np.array(wf[:n]) * amp + off
+                channels.append(data)
+            else:
+                channels.append(None)
 
-                # Update card labels (via main thread)
-                card = self.cards[i]
-                card["enable"].setText("Enabled" if en else "Disabled")
-                card["enable"].setStyleSheet(
-                    f"font-weight:bold;color:{'#66bb6a' if en else '#ef5350'};")
-                card["amp"].setText(f"{float(amp or 0):.4f}")
-                card["offset"].setText(f"{float(off or 0):.4f} V")
-                pts = len(wf) if wf is not None and hasattr(wf, '__len__') else 0
-                card["points"].setText(str(pts))
+            card = self.cards[i]
+            card["enable"].setText("Enabled" if card_state["enable"] else "Disabled")
+            card["enable"].setStyleSheet(
+                f"font-weight:bold;color:{'#66bb6a' if card_state['enable'] else '#ef5350'};")
+            card["amp"].setText(f"{amp:.4f}")
+            card["offset"].setText(f"{off:.4f} V")
+            card["points"].setText(str(card_state["points"]))
 
-            is_running = (run == "Run")
-            loop_time = 1.0/float(freq) if freq and float(freq) > 0 else 0
+        is_running = (state["run"] == "Run")
+        loop_time = 1.0 / freq if freq > 0 else 0
 
-            self.run_l.setText(run or "--")
-            self.run_l.setStyleSheet(
-                f"font-weight:bold;color:{'#66bb6a' if is_running else '#ef5350'};")
-            self.freq_l.setText(f"{float(freq or 0):.6f} Hz")
-            self.loop_l.setText(f"{loop_time:.4f} s")
-            self.npts_l.setText(str(int(npts or 0)))
-
-            self.plot.update_channels(channels, enabled, is_running, loop_time)
-
-        threading.Thread(target=_do, daemon=True).start()
+        self.run_l.setText(state["run"])
+        self.run_l.setStyleSheet(
+            f"font-weight:bold;color:{'#66bb6a' if is_running else '#ef5350'};")
+        self.freq_l.setText(f"{freq:.6f} Hz")
+        self.loop_l.setText(f"{loop_time:.4f} s")
+        self.npts_l.setText(str(npts))
+        self.plot.update_channels(channels, enabled, is_running, loop_time)

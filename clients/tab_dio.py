@@ -8,6 +8,7 @@ class DIOTab(QWidget):
         super().__init__()
         self.w = worker
         self.w.dio_update.connect(self._on_dio)
+        self._syncing = False
         self._build()
 
     def _build(self):
@@ -69,20 +70,39 @@ class DIOTab(QWidget):
         main.addStretch()
 
     def _dir_changed(self, line, val):
+        if self._syncing:
+            return
         self.w.send_dio_dir(line, val)
 
     def _out_toggle(self, line, checked):
+        if self._syncing:
+            return
         self.out_states[line] = 1 if checked else 0
         self.out_btns[line].setText("HIGH" if checked else "LOW")
         self.w.send_dio(line, self.out_states[line])
 
-    def _on_dio(self, states):
-        for i, s in enumerate(states):
-            if i < 16:
-                self.in_labels[i].setText("HIGH" if s else "LOW")
+    def _on_dio(self, state):
+        inputs = state.get("inputs", [])
+        directions = state.get("directions", [])
+        outputs = state.get("outputs", [])
+        self._syncing = True
+        try:
+            for i in range(16):
+                direction = directions[i] if i < len(directions) else 0
+                output = outputs[i] if i < len(outputs) else 0
+                inp = inputs[i] if i < len(inputs) else 0
+
+                self.dir_combos[i].setCurrentIndex(direction)
+                self.out_states[i] = output
+                self.out_btns[i].setChecked(bool(output))
+                self.out_btns[i].setText("HIGH" if output else "LOW")
+                self.out_btns[i].setEnabled(bool(direction))
+                self.in_labels[i].setText("HIGH" if inp else "LOW")
                 self.in_labels[i].setStyleSheet(
-                    f"color:{'#66bb6a' if s else '#ef5350'};background:#2a2d36;"
+                    f"color:{'#66bb6a' if inp else '#ef5350'};background:#2a2d36;"
                     "border:1px solid #3d414d;border-radius:3px;padding:4px;")
+        finally:
+            self._syncing = False
 
     def poll(self):
         self.w.poll_dio()

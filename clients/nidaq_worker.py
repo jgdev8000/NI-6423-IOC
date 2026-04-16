@@ -9,9 +9,11 @@ PREFIX = "MEMS:"
 class EpicsWorker(QObject):
     status_update = pyqtSignal(str, bool, int)
     load_done = pyqtSignal(str)
+    operation_error = pyqtSignal(str)
     ai_update = pyqtSignal(list)
-    dio_update = pyqtSignal(list)
-    ctr_update = pyqtSignal(int, int, float)
+    ao_state = pyqtSignal(dict)
+    dio_update = pyqtSignal(dict)
+    ctr_update = pyqtSignal(dict)
     wavegen_state = pyqtSignal(dict)
 
     def __init__(self):
@@ -31,9 +33,18 @@ class EpicsWorker(QObject):
         except: return None
 
     def _put(self, pv, value):
-        if not self._epics: return
-        try: self._epics.caput(f"{PREFIX}{pv}", value, timeout=5.0)
-        except: pass
+        if not self._epics:
+            self.operation_error.emit(f"Write failed: {PREFIX}{pv} (EPICS not initialized)")
+            return False
+        try:
+            result = self._epics.caput(f"{PREFIX}{pv}", value, wait=True, timeout=5.0)
+            if result is False or result is None:
+                self.operation_error.emit(f"Write failed: {PREFIX}{pv}")
+                return False
+            return True
+        except Exception as exc:
+            self.operation_error.emit(f"Write failed: {PREFIX}{pv} ({exc})")
+            return False
 
     def _bg(self, fn):
         if self._stopping:
@@ -82,18 +93,71 @@ class EpicsWorker(QObject):
 
     def poll_dio(self):
         def _do():
-            states = []
+            state = {"inputs": [], "directions": [], "outputs": []}
             for i in range(16):
                 d = self._get(f"DIO:{i}:In")
-                states.append(int(d) if d is not None else 0)
-            self.dio_update.emit(states)
+                direction = self._get(f"DIO:{i}:Direction")
+                out = self._get(f"DIO:{i}:Out")
+                state["inputs"].append(int(d) if d is not None else 0)
+                state["directions"].append(int(direction) if direction is not None else 0)
+                state["outputs"].append(int(out) if out is not None else 0)
+            self.dio_update.emit(state)
         self._bg(_do)
 
-    def poll_ctr(self, ctr):
+    def poll_ctr(self):
         def _do():
-            count = self._get(f"Ctr:{ctr}:Count")
-            freq = self._get(f"Ctr:{ctr}:Frequency")
-            self.ctr_update.emit(ctr, int(count or 0), float(freq or 0))
+            counters = []
+            for ctr in range(4):
+                count = self._get(f"Ctr:{ctr}:Count")
+                freq = self._get(f"Ctr:{ctr}:Frequency")
+                mode = self._get(f"Ctr:{ctr}:Mode")
+                pulse_freq = self._get(f"Ctr:{ctr}:PulseFreq")
+                pulse_duty = self._get(f"Ctr:{ctr}:PulseDuty")
+                pulse_run = self._get(f"Ctr:{ctr}:PulseRun")
+                counters.append({
+                    "ctr": ctr,
+                    "count": int(count or 0),
+                    "freq": float(freq or 0.0),
+                    "mode": int(mode or 0),
+                    "pulse_freq": float(pulse_freq or 0.0),
+                    "pulse_duty": float(pulse_duty or 0.0),
+                    "pulse_run": bool(pulse_run),
+                })
+            self.ctr_update.emit({"counters": counters})
+        self._bg(_do)
+
+    def poll_ao(self):
+        def _do():
+            run = self._get("WaveGen:Run", as_string=True)
+            freq = self._get("WaveGen:Frequency")
+            npts = self._get("WaveGen:NumPoints")
+            channels = []
+            enabled = []
+            cards = []
+
+            for i in range(4):
+                en = self._get(f"WaveGen:Ch{i}:Enable")
+                amp = self._get(f"WaveGen:Ch{i}:Amplitude")
+                off = self._get(f"WaveGen:Ch{i}:Offset")
+                wf = self._get(f"WaveGen:Ch{i}:UserWF")
+                enabled_flag = bool(en)
+                enabled.append(enabled_flag)
+                channels.append(wf)
+                cards.append({
+                    "enable": enabled_flag,
+                    "amplitude": float(amp or 0.0),
+                    "offset": float(off or 0.0),
+                    "points": len(wf) if wf is not None and hasattr(wf, "__len__") else 0,
+                })
+
+            self.ao_state.emit({
+                "run": run or "--",
+                "frequency": float(freq or 0.0),
+                "num_points": int(npts or 0),
+                "channels": channels,
+                "enabled": enabled,
+                "cards": cards,
+            })
         self._bg(_do)
 
     def send_start(self):

@@ -9,6 +9,7 @@ class CounterPanel(QWidget):
         super().__init__()
         self.ctr = ctr_id
         self.w = worker
+        self._syncing = False
         self._build()
 
     def _build(self):
@@ -60,9 +61,13 @@ class CounterPanel(QWidget):
         layout.addWidget(g)
 
     def _mode_changed(self, idx):
+        if self._syncing:
+            return
         self.w.send_ctr_mode(self.ctr, idx)
 
     def _pulse_toggle(self, checked):
+        if self._syncing:
+            return
         try:
             f = float(self.pfreq.text())
             d = float(self.pduty.text())
@@ -70,9 +75,18 @@ class CounterPanel(QWidget):
         self.pulse_btn.setText("Stop Pulse" if checked else "Start Pulse")
         self.w.send_ctr_pulse(self.ctr, f, d, checked)
 
-    def update_values(self, count, freq):
-        self.count_l.setText(str(count))
-        self.freq_l.setText(f"{freq:.3f} Hz")
+    def update_values(self, state):
+        self._syncing = True
+        try:
+            self.mode.setCurrentIndex(state["mode"])
+            self.pfreq.setText(f"{state['pulse_freq']:.3f}")
+            self.pduty.setText(f"{state['pulse_duty']:.3f}")
+            self.pulse_btn.setChecked(state["pulse_run"])
+            self.pulse_btn.setText("Stop Pulse" if state["pulse_run"] else "Start Pulse")
+            self.count_l.setText(str(state["count"]))
+            self.freq_l.setText(f"{state['freq']:.3f} Hz")
+        finally:
+            self._syncing = False
 
 
 class CountersTab(QWidget):
@@ -95,10 +109,11 @@ class CountersTab(QWidget):
         main.addLayout(grid)
         main.addStretch()
 
-    def _on_ctr(self, ctr, count, freq):
-        if 0 <= ctr < 4:
-            self.panels[ctr].update_values(count, freq)
+    def _on_ctr(self, state):
+        for ctr_state in state.get("counters", []):
+            ctr = ctr_state["ctr"]
+            if 0 <= ctr < 4:
+                self.panels[ctr].update_values(ctr_state)
 
     def poll(self):
-        for i in range(4):
-            self.w.poll_ctr(i)
+        self.w.poll_ctr()

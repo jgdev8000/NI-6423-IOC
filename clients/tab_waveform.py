@@ -287,7 +287,7 @@ class PairControls(QWidget):
             self._u_path=self._v_path=p; self.u_data=a; self.v_data=b
             self.ul.setText(os.path.basename(p)+" [0]")
             self.vl.setText(os.path.basename(p)+" [1]")
-            self.add_recent(p, p)
+            self.tab._save_config()
             self._preview()
         except Exception as e: QMessageBox.critical(self, "Error", str(e))
 
@@ -421,51 +421,52 @@ class WaveformTab(QWidget):
 
         def _send():
             with self.w._lock:
+                ok = True
                 self.w.load_done.emit("Stopping...")
-                self.w._put("WaveGen:Run", 0)
+                ok = self.w._put("WaveGen:Run", 0) and ok
                 import time; time.sleep(0.3)
 
                 n = len(u0)
-                self.w._put("WaveGen:NumPoints", n)
-                self.w._put("WaveGen:Frequency", freq)
-                self.w._put("WaveGen:MarkerEnable", 1)
-                self.w._put("WaveGen:MarkerWidth", 10)
+                ok = self.w._put("WaveGen:NumPoints", n) and ok
+                ok = self.w._put("WaveGen:Frequency", freq) and ok
+                ok = self.w._put("WaveGen:MarkerEnable", 1) and ok
+                ok = self.w._put("WaveGen:MarkerWidth", 10) and ok
 
                 self.w.load_done.emit(f"Sending AO0 ({n})...")
-                self.w._put("WaveGen:Ch0:UserWF", u0)
-                self.w._put("WaveGen:Ch0:Amplitude", 1.0)
-                self.w._put("WaveGen:Ch0:Offset", 0.0)
-                self.w._put("WaveGen:Ch0:Enable", 1)
+                ok = self.w._put("WaveGen:Ch0:UserWF", u0) and ok
+                ok = self.w._put("WaveGen:Ch0:Amplitude", 1.0) and ok
+                ok = self.w._put("WaveGen:Ch0:Offset", 0.0) and ok
+                ok = self.w._put("WaveGen:Ch0:Enable", 1) and ok
 
                 self.w.load_done.emit(f"Sending AO1 ({n})...")
-                self.w._put("WaveGen:Ch1:UserWF", v0)
-                self.w._put("WaveGen:Ch1:Amplitude", 1.0)
-                self.w._put("WaveGen:Ch1:Offset", 0.0)
-                self.w._put("WaveGen:Ch1:Enable", 1)
+                ok = self.w._put("WaveGen:Ch1:UserWF", v0) and ok
+                ok = self.w._put("WaveGen:Ch1:Amplitude", 1.0) and ok
+                ok = self.w._put("WaveGen:Ch1:Offset", 0.0) and ok
+                ok = self.w._put("WaveGen:Ch1:Enable", 1) and ok
 
                 if u1 is not None and v1 is not None:
                     self.w.load_done.emit("Sending AO2/AO3...")
-                    self.w._put("WaveGen:Ch2:UserWF", u1)
-                    self.w._put("WaveGen:Ch2:Amplitude", 1.0)
-                    self.w._put("WaveGen:Ch2:Offset", 0.0)
-                    self.w._put("WaveGen:Ch2:Enable", 1)
-                    self.w._put("WaveGen:Ch3:UserWF", v1)
-                    self.w._put("WaveGen:Ch3:Amplitude", 1.0)
-                    self.w._put("WaveGen:Ch3:Offset", 0.0)
-                    self.w._put("WaveGen:Ch3:Enable", 1)
+                    ok = self.w._put("WaveGen:Ch2:UserWF", u1) and ok
+                    ok = self.w._put("WaveGen:Ch2:Amplitude", 1.0) and ok
+                    ok = self.w._put("WaveGen:Ch2:Offset", 0.0) and ok
+                    ok = self.w._put("WaveGen:Ch2:Enable", 1) and ok
+                    ok = self.w._put("WaveGen:Ch3:UserWF", v1) and ok
+                    ok = self.w._put("WaveGen:Ch3:Amplitude", 1.0) and ok
+                    ok = self.w._put("WaveGen:Ch3:Offset", 0.0) and ok
+                    ok = self.w._put("WaveGen:Ch3:Enable", 1) and ok
                 else:
-                    self.w._put("WaveGen:Ch2:Enable", 0)
-                    self.w._put("WaveGen:Ch3:Enable", 0)
+                    ok = self.w._put("WaveGen:Ch2:Enable", 0) and ok
+                    ok = self.w._put("WaveGen:Ch3:Enable", 0) and ok
 
-                self.w._put("WaveGen:TriggerSource", self.trig_src.currentIndex())
-                self.w._put("WaveGen:TriggerEdge", 0)
+                ok = self.w._put("WaveGen:TriggerSource", self.trig_src.currentIndex()) and ok
+                ok = self.w._put("WaveGen:TriggerEdge", 0) and ok
 
-                if auto_restart and self._is_running:
-                    self.w._put("WaveGen:Continuous", 1)
-                    self.w._put("WaveGen:Run", 1)
-                    self.w.load_done.emit(f"Running ({n} pts)")
+                if auto_restart and self._is_running and ok:
+                    ok = self.w._put("WaveGen:Continuous", 1) and ok
+                    ok = self.w._put("WaveGen:Run", 1) and ok
+                    self.w.load_done.emit(f"Running ({n} pts)" if ok else "Waveform load failed")
                 else:
-                    self.w.load_done.emit(f"Loaded {n} pts. Press Start.")
+                    self.w.load_done.emit(f"Loaded {n} pts. Press Start." if ok else "Waveform load failed")
         threading.Thread(target=_send, daemon=True).start()
 
         # Save config after loading
@@ -485,54 +486,61 @@ class WaveformTab(QWidget):
 
         def _send():
             with self.w._lock:
+                ok = True
                 self.w.load_done.emit("Stopping...")
-                self.w._put("WaveGen:Run", 0)
+                ok = self.w._put("WaveGen:Run", 0) and ok
                 import time; time.sleep(0.3)
                 n = len(u)
-                self.w._put("WaveGen:NumPoints", n)
-                self.w._put("WaveGen:Frequency", freq)
+                ok = self.w._put("WaveGen:NumPoints", n) and ok
+                ok = self.w._put("WaveGen:Frequency", freq) and ok
 
                 self.w.load_done.emit(f"Sending AO{pair.ch_a} ({n})...")
-                self.w._put(f"WaveGen:Ch{pair.ch_a}:UserWF", u)
-                self.w._put(f"WaveGen:Ch{pair.ch_a}:Amplitude", 1.0)
-                self.w._put(f"WaveGen:Ch{pair.ch_a}:Offset", 0.0)
-                self.w._put(f"WaveGen:Ch{pair.ch_a}:Enable", 1)
+                ok = self.w._put(f"WaveGen:Ch{pair.ch_a}:UserWF", u) and ok
+                ok = self.w._put(f"WaveGen:Ch{pair.ch_a}:Amplitude", 1.0) and ok
+                ok = self.w._put(f"WaveGen:Ch{pair.ch_a}:Offset", 0.0) and ok
+                ok = self.w._put(f"WaveGen:Ch{pair.ch_a}:Enable", 1) and ok
 
                 self.w.load_done.emit(f"Sending AO{pair.ch_b} ({n})...")
-                self.w._put(f"WaveGen:Ch{pair.ch_b}:UserWF", v)
-                self.w._put(f"WaveGen:Ch{pair.ch_b}:Amplitude", 1.0)
-                self.w._put(f"WaveGen:Ch{pair.ch_b}:Offset", 0.0)
-                self.w._put(f"WaveGen:Ch{pair.ch_b}:Enable", 1)
+                ok = self.w._put(f"WaveGen:Ch{pair.ch_b}:UserWF", v) and ok
+                ok = self.w._put(f"WaveGen:Ch{pair.ch_b}:Amplitude", 1.0) and ok
+                ok = self.w._put(f"WaveGen:Ch{pair.ch_b}:Offset", 0.0) and ok
+                ok = self.w._put(f"WaveGen:Ch{pair.ch_b}:Enable", 1) and ok
 
-                self.w._put("WaveGen:TriggerSource", self.trig_src.currentIndex())
+                other_channels = [ch for ch in range(4) if ch not in (pair.ch_a, pair.ch_b)]
+                for ch in other_channels:
+                    ok = self.w._put(f"WaveGen:Ch{ch}:Enable", 0) and ok
 
-                if should_restart:
-                    self.w._put("WaveGen:Continuous", 1)
-                    self.w._put("WaveGen:Run", 1)
-                    self.w.load_done.emit(f"Running AO{pair.ch_a}/AO{pair.ch_b} ({n} pts)")
+                ok = self.w._put("WaveGen:TriggerSource", self.trig_src.currentIndex()) and ok
+                ok = self.w._put("WaveGen:TriggerEdge", 0) and ok
+
+                if should_restart and ok:
+                    ok = self.w._put("WaveGen:Continuous", 1) and ok
+                    ok = self.w._put("WaveGen:Run", 1) and ok
+                    self.w.load_done.emit(
+                        f"Running AO{pair.ch_a}/AO{pair.ch_b} ({n} pts)" if ok else "Waveform load failed")
                 else:
-                    self.w.load_done.emit(f"Loaded {n} pts. Press Start.")
+                    self.w.load_done.emit(f"Loaded {n} pts. Press Start." if ok else "Waveform load failed")
         threading.Thread(target=_send, daemon=True).start()
 
     def _stop(self):
         """Stop output and return all AO channels to 0V (center)."""
         def _do():
-            self.w._put("WaveGen:Run", 0)
+            ok = self.w._put("WaveGen:Run", 0)
             import time; time.sleep(0.2)
             # Write single-point zero waveform to park at center
             import numpy as np
             zero = np.array([0.0], dtype=np.float64)
-            self.w._put("WaveGen:NumPoints", 1)
+            ok = self.w._put("WaveGen:NumPoints", 1) and ok
             for ch in range(4):
-                self.w._put(f"WaveGen:Ch{ch}:UserWF", zero)
-                self.w._put(f"WaveGen:Ch{ch}:Amplitude", 1.0)
-                self.w._put(f"WaveGen:Ch{ch}:Offset", 0.0)
+                ok = self.w._put(f"WaveGen:Ch{ch}:UserWF", zero) and ok
+                ok = self.w._put(f"WaveGen:Ch{ch}:Amplitude", 1.0) and ok
+                ok = self.w._put(f"WaveGen:Ch{ch}:Offset", 0.0) and ok
             # Run once to output the zero value, then stop
-            self.w._put("WaveGen:Continuous", 0)
-            self.w._put("WaveGen:Run", 1)
+            ok = self.w._put("WaveGen:Continuous", 0) and ok
+            ok = self.w._put("WaveGen:Run", 1) and ok
             time.sleep(0.1)
-            self.w._put("WaveGen:Run", 0)
-            self.w.load_done.emit("Stopped — centered at 0V")
+            ok = self.w._put("WaveGen:Run", 0) and ok
+            self.w.load_done.emit("Stopped — centered at 0V" if ok else "Stop/center failed")
         import threading
         threading.Thread(target=_do, daemon=True).start()
 
