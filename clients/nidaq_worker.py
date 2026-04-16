@@ -257,21 +257,33 @@ class EpicsWorker(QObject):
                     break
                 time.sleep(0.2)
 
-            channel_data = []
-            for ch in range(32):
-                data = self._get(f"AIAcq:{ch}:Data")
-                if data is not None and hasattr(data, "__len__"):
-                    channel_data.append(list(data[:acquired] if acquired > 0 else data))
-                else:
-                    channel_data.append([])
-
             self.ai_acq_update.emit({
                 "rate": float(rate),
                 "num_points": int(npts),
                 "num_acquired": acquired,
                 "trigger_source": int(trig),
                 "clock_source": int(clk),
+            })
+        self._bg(_do)
+
+    def fetch_ai_acq_channels(self, channels):
+        channels = sorted({int(ch) for ch in channels if 0 <= int(ch) < 32})
+
+        def _do():
+            acquired = int(self._get("AIAcq:NumAcquired") or 0)
+            rate = float(self._get("AIAcq:Rate") or 0.0)
+            channel_data = {}
+            for ch in channels:
+                data = self._get(f"AIAcq:{ch}:Data")
+                if data is not None and hasattr(data, "__len__"):
+                    channel_data[ch] = list(data[:acquired] if acquired > 0 else data)
+                else:
+                    channel_data[ch] = []
+            self.ai_acq_update.emit({
+                "rate": rate,
+                "num_acquired": acquired,
                 "channels": channel_data,
+                "fetched_channels": channels,
             })
         self._bg(_do)
 

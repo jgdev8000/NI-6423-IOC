@@ -57,7 +57,9 @@ class AITab(QWidget):
         self.w = worker
         self.w.ai_update.connect(self._on_ai)
         self.w.ai_acq_update.connect(self._on_ai_acq)
-        self._acq_data = {"channels": [[] for _ in range(32)], "rate": 0.0, "num_acquired": 0}
+        self._acq_meta = {"rate": 0.0, "num_acquired": 0}
+        self._acq_cache = {}
+        self._pending_export_path = None
         self._build()
 
     def _build(self):
@@ -155,22 +157,37 @@ class AITab(QWidget):
         self.w.send_ai_acq(rate, npts, self.trig.currentIndex(), self.clk.currentIndex())
 
     def _on_ai_acq(self, state):
-        self._acq_data = state
+        if "fetched_channels" in state:
+            self._acq_meta["rate"] = state.get("rate", self._acq_meta["rate"])
+            self._acq_meta["num_acquired"] = state.get("num_acquired", self._acq_meta["num_acquired"])
+            self._acq_cache.update(state.get("channels", {}))
+            self._refresh_plot()
+            if self._pending_export_path and all(ch in self._acq_cache for ch in range(32)):
+                self._write_csv(self._pending_export_path)
+                self._pending_export_path = None
+            return
+
+        self._acq_meta = {
+            "rate": state.get("rate", 0.0),
+            "num_acquired": state.get("num_acquired", 0),
+        }
+        self._acq_cache = {}
         self.acq_status.setText(
             f"Captured {state['num_acquired']} samples/ch at {state['rate']:.1f} Hz")
-        self._refresh_plot()
+        self.w.fetch_ai_acq_channels([self.display_ch.currentIndex()])
 
     def _refresh_plot(self):
         ch = self.display_ch.currentIndex()
-        channels = self._acq_data.get("channels", [])
-        trace = channels[ch] if 0 <= ch < len(channels) else []
-        self.plot.update_trace(trace, self._acq_data.get("rate", 0.0), ch,
-                               self._acq_data.get("num_acquired", 0))
+        if ch not in self._acq_cache and self._acq_meta.get("num_acquired", 0) > 0:
+            self.w.fetch_ai_acq_channels([ch])
+            return
+        trace = self._acq_cache.get(ch, [])
+        self.plot.update_trace(trace, self._acq_meta.get("rate", 0.0), ch,
+                               self._acq_meta.get("num_acquired", 0))
 
     def _export_csv(self):
-        channels = self._acq_data.get("channels", [])
-        acquired = self._acq_data.get("num_acquired", 0)
-        if acquired <= 0 or not any(len(ch) for ch in channels):
+        acquired = self._acq_meta.get("num_acquired", 0)
+        if acquired <= 0:
             self.acq_status.setText("No acquisition data to export")
             return
 
@@ -178,13 +195,24 @@ class AITab(QWidget):
         if not path:
             return
 
+        missing = [ch for ch in range(32) if ch not in self._acq_cache]
+        if missing:
+            self.acq_status.setText("Fetching channels for export...")
+            self._pending_export_path = path
+            self.w.fetch_ai_acq_channels(missing)
+            return
+
+        self._write_csv(path)
+
+    def _write_csv(self, path):
+        acquired = self._acq_meta.get("num_acquired", 0)
         with open(path, "w", newline="") as f:
             writer = csv.writer(f)
             writer.writerow(["sample"] + [f"AI{i}" for i in range(32)])
             for idx in range(acquired):
                 row = [idx]
                 for ch in range(32):
-                    vals = channels[ch] if ch < len(channels) else []
+                    vals = self._acq_cache.get(ch, [])
                     row.append(vals[idx] if idx < len(vals) else "")
                 writer.writerow(row)
         self.acq_status.setText(f"Exported acquisition to {os.path.basename(path)}")
