@@ -12,7 +12,9 @@
     }
   ],
   "settings": {
-    "loop_time_0": ".1",
+    "pattern_folder_0": "/home/cxrodev/Downloads/pupilFills",
+    "pattern_folder_1": "",
+    "loop_time_0": ".5",
     "loop_time_1": "1.0",
     "trigger_source": 0,
     "scale_u0": "1",
@@ -27,8 +29,8 @@
     "offset_v1": "0.0",
     "filter_enable_1": false,
     "cutoff_1": "1000",
-    "last_u0": "/home/cxrodev/u.csv",
-    "last_v0": "/home/cxrodev/v.csv",
+    "last_u0": "/home/cxrodev/Downloads/pupilFills/quasarX.csv",
+    "last_v0": "/home/cxrodev/Downloads/pupilFills/quasarY.csv",
     "last_u1": "",
     "last_v1": ""
   },

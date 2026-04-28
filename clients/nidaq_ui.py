@@ -109,10 +109,9 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         self.poll_timer.stop()
         self.glow_timer.stop()
-        # Deactivate outputs and center on close
+        # Stop and center on close
+        self.worker._put_nowait("WaveGen:Run", 0)
         self.wf_tab._outputs_active = False
-        self.wf_tab._stop()
-        import time; time.sleep(0.5)
         self.wf_tab.save_settings()
         self.worker.shutdown()
         event.accept()

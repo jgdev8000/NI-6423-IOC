@@ -47,6 +47,13 @@ class EpicsWorker(QObject):
             self.operation_error.emit(f"Write failed: {PREFIX}{pv} ({exc})")
             return False
 
+    def _put_nowait(self, pv, value):
+        """Non-blocking caput — use for Run PV and stop sequences."""
+        if not self._epics: return
+        try:
+            self._epics.caput(f"{PREFIX}{pv}", value, wait=False, timeout=2.0)
+        except: pass
+
     def _bg(self, fn):
         if self._stopping:
             return
@@ -169,7 +176,7 @@ class EpicsWorker(QObject):
         self._bg(lambda: (self._put("WaveGen:Continuous", 1), self._put("WaveGen:Run", 1)))
 
     def send_stop(self):
-        self._bg(lambda: self._put("WaveGen:Run", 0))
+        self._bg(lambda: self._put_nowait("WaveGen:Run", 0))
 
     def send_loop_time(self, freq):
         def _do():

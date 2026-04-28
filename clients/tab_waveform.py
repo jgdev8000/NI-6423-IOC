@@ -565,22 +565,21 @@ class WaveformTab(QWidget):
     def _stop(self):
         """Stop output and return all AO channels to 0V (center)."""
         def _do():
-            ok = self.w._put("WaveGen:Run", 0)
-            import time; time.sleep(0.2)
-            # Write single-point zero waveform to park at center
+            self.w._put_nowait("WaveGen:Run", 0)
+            import time; time.sleep(0.5)
+            # Park at 0V
             import numpy as np
             zero = np.array([0.0], dtype=np.float64)
-            ok = self.w._put("WaveGen:NumPoints", 1) and ok
+            self.w._put_nowait("WaveGen:NumPoints", 1)
             for ch in range(4):
-                ok = self.w._put(f"WaveGen:Ch{ch}:UserWF", zero) and ok
-                ok = self.w._put(f"WaveGen:Ch{ch}:Amplitude", 1.0) and ok
-                ok = self.w._put(f"WaveGen:Ch{ch}:Offset", 0.0) and ok
-            # Run once to output the zero value, then stop
-            ok = self.w._put("WaveGen:Continuous", 0) and ok
-            ok = self.w._put("WaveGen:Run", 1) and ok
-            time.sleep(0.1)
-            ok = self.w._put("WaveGen:Run", 0) and ok
-            self.w.load_done.emit("Stopped — centered at 0V" if ok else "Stop/center failed")
+                self.w._put_nowait(f"WaveGen:Ch{ch}:UserWF", zero)
+                self.w._put_nowait(f"WaveGen:Ch{ch}:Amplitude", 1.0)
+                self.w._put_nowait(f"WaveGen:Ch{ch}:Offset", 0.0)
+            self.w._put_nowait("WaveGen:Continuous", 0)
+            self.w._put_nowait("WaveGen:Run", 1)
+            time.sleep(0.2)
+            self.w._put_nowait("WaveGen:Run", 0)
+            self.w.load_done.emit("Stopped — centered at 0V")
         import threading
         threading.Thread(target=_do, daemon=True).start()
 
