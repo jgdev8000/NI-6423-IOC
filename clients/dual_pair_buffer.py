@@ -13,6 +13,7 @@ Effective timing resolution is the base period (>= 0.1 s). Slower periods are
 quantized to multiples of the base period via round(period / base).
 """
 import numpy as np
+from dataclasses import dataclass, field
 
 MIN_PERIOD = 0.1      # s, minimum allowed loop time and timing resolution
 MAX_POINTS = 10000    # per-channel hardware buffer limit (IOC maxPoints)
@@ -35,9 +36,6 @@ def zoh_resample(arr, target_len):
         return a.copy()
     idx = (np.arange(target_len) * n) // target_len
     return a[idx]
-
-
-from dataclasses import dataclass, field
 
 
 @dataclass
@@ -71,6 +69,10 @@ def build_dual_pair_buffers(u0, v0, p0, u1, v1, p1,
         warns.append(f"AO0/1 loop time raised to {p0c:.3f}s (min)")
     if p1c != pr1:
         warns.append(f"AO2/3 loop time raised to {p1c:.3f}s (min)")
+
+    for nm, arr in (("u0", u0), ("v0", v0), ("u1", u1), ("v1", v1)):
+        if len(arr) == 0:
+            return DualPairResult(ok=False, error=f"{nm} is empty")
 
     base = min(p0c, p1c)
     ticks0 = max(1, int(p0c / base + 0.5 + 1e-9))   # round half up; faster pair -> 1

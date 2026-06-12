@@ -99,6 +99,12 @@ class TestBuildDualPair(unittest.TestCase):
         self.assertEqual(r.ticks, (1, 2))
         self.assertAlmostEqual(r.eff_periods[1], 0.2)
 
+    def test_empty_pattern_returns_error(self):
+        r = build_dual_pair_buffers(_ramp(0), _ramp(0), 0.1, _ramp(10), _ramp(10), 0.1)
+        self.assertFalse(r.ok)
+        self.assertIn("empty", r.error)
+        self.assertEqual(r.channels, [])
+
 
 if __name__ == "__main__":
     unittest.main()
