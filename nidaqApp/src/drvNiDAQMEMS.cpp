@@ -382,39 +382,51 @@ int drvNiDAQMEMS::startWaveGen()
         ret = DAQmxCreateAOVoltageChan(aoTask_, aoChanSpec, "", -10.0, 10.0, DAQmx_Val_Volts, NULL);
         if (ret < 0) { reportDAQmxError(ret, functionName); return -1; }
 
-        int32 sampleMode = continuous ? DAQmx_Val_ContSamps : DAQmx_Val_FiniteSamps;
-        ret = DAQmxCfgSampClkTiming(aoTask_, "", requestedSampleRate,
-            DAQmx_Val_Rising, sampleMode, (uInt64)numPoints);
-        if (ret < 0) { reportDAQmxError(ret, functionName); return -1; }
+        /* A single-sample "waveform" is a static park value, not a clocked
+         * generation. NI-DAQmx cannot write or start a sample-clock-timed AO
+         * task with a one-sample buffer (error -200802), so fall back to
+         * on-demand (software-timed) output: write the sample with autostart
+         * and skip the sample clock, hardware start trigger, and marker pulse
+         * (the marker DO slaves off the AO sample clock, which does not exist
+         * for an on-demand task). This is the canonical way to hold a static
+         * AO voltage and is exactly what the stop-to-park sequence wants. */
+        bool onDemand = (numPoints < 2);
 
-        if (trigSrc > 0) {
-            char trigTerm[128];
-            snprintf(trigTerm, sizeof(trigTerm), "/%s/PFI%d", devName_, trigSrc - 1);
-            int32 edge = trigEdge ? DAQmx_Val_Falling : DAQmx_Val_Rising;
-            ret = DAQmxCfgDigEdgeStartTrig(aoTask_, trigTerm, edge);
+        if (!onDemand) {
+            int32 sampleMode = continuous ? DAQmx_Val_ContSamps : DAQmx_Val_FiniteSamps;
+            ret = DAQmxCfgSampClkTiming(aoTask_, "", requestedSampleRate,
+                DAQmx_Val_Rising, sampleMode, (uInt64)numPoints);
             if (ret < 0) { reportDAQmxError(ret, functionName); return -1; }
-        }
 
-        uInt32 onboardSize = 0;
-        DAQmxGetBufOutputOnbrdBufSize(aoTask_, &onboardSize);
-        if (numPoints * numChans <= (int)onboardSize) {
-            DAQmxSetWriteRegenMode(aoTask_, DAQmx_Val_AllowRegen);
-        } else {
-            for (int c = 0; c < numChans; c++) {
-                char cn[128];
-                snprintf(cn, sizeof(cn), "%s/ao%d", devName_, chanIdx[c]);
-                DAQmxSetAOUsbXferReqSize(aoTask_, cn, 65536);
+            if (trigSrc > 0) {
+                char trigTerm[128];
+                snprintf(trigTerm, sizeof(trigTerm), "/%s/PFI%d", devName_, trigSrc - 1);
+                int32 edge = trigEdge ? DAQmx_Val_Falling : DAQmx_Val_Rising;
+                ret = DAQmxCfgDigEdgeStartTrig(aoTask_, trigTerm, edge);
+                if (ret < 0) { reportDAQmxError(ret, functionName); return -1; }
             }
-        }
 
-        DAQmxGetSampClkRate(aoTask_, &actualSampleRate);
+            uInt32 onboardSize = 0;
+            DAQmxGetBufOutputOnbrdBufSize(aoTask_, &onboardSize);
+            if (numPoints * numChans <= (int)onboardSize) {
+                DAQmxSetWriteRegenMode(aoTask_, DAQmx_Val_AllowRegen);
+            } else {
+                for (int c = 0; c < numChans; c++) {
+                    char cn[128];
+                    snprintf(cn, sizeof(cn), "%s/ao%d", devName_, chanIdx[c]);
+                    DAQmxSetAOUsbXferReqSize(aoTask_, cn, 65536);
+                }
+            }
+
+            DAQmxGetSampClkRate(aoTask_, &actualSampleRate);
+        }
 
         int32 written = 0;
-        ret = DAQmxWriteAnalogF64(aoTask_, numPoints, 0, 10.0,
+        ret = DAQmxWriteAnalogF64(aoTask_, numPoints, onDemand ? 1 : 0, 10.0,
             DAQmx_Val_GroupByScanNumber, aoBuffer_, &written, NULL);
         if (ret < 0) { reportDAQmxError(ret, functionName); return -1; }
 
-        if (markerEnable) {
+        if (markerEnable && !onDemand) {
             int pw = markerWidth;
             if (pw < 1) pw = 1;
             if (pw > numPoints) pw = numPoints;
@@ -437,8 +449,12 @@ int drvNiDAQMEMS::startWaveGen()
             if (ret < 0) reportDAQmxError(ret, functionName);
         }
 
-        ret = DAQmxStartTask(aoTask_);
-        if (ret < 0) { reportDAQmxError(ret, functionName); return -1; }
+        /* On-demand writes autostart; an explicit start is only needed (and
+         * only valid) for the sample-clock-timed generation path. */
+        if (!onDemand) {
+            ret = DAQmxStartTask(aoTask_);
+            if (ret < 0) { reportDAQmxError(ret, functionName); return -1; }
+        }
     }
     /* else: sim mode — skip all DAQmx, just update PVs */
 
