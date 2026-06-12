@@ -8,6 +8,7 @@ from PyQt6.QtGui import QFont
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 from waveform_filter import waveform_filter, load_mat_pattern
+from dual_pair_buffer import build_dual_pair_buffers
 
 BG="#1b1d23"; AXB="#22252d"; GC="#33363f"; TC="#b0b4bc"
 COLORS=["#4fc3f7","#ffb74d","#ce93d8","#a5d6a7"]
@@ -449,8 +450,24 @@ class WaveformTab(QWidget):
                 QMessageBox.warning(self, "Invalid waveform setup", message)
             return
 
-        # Use pair0's loop time for the hardware clock (all channels share one clock)
-        freq = 1.0 / lt0 if lt0 > 0 else 1.0
+        # When both pairs are loaded they share one AO clock; build one
+        # integer-ratio-tiled buffer (slower pair zero-order-held). A single
+        # loaded pair keeps the simple one-rate path.
+        both = u1 is not None and v1 is not None
+        if both:
+            res = build_dual_pair_buffers(u0, v0, lt0, u1, v1, lt1)
+            if not res.ok:
+                self.validation_l.setText(res.error)
+                self.validation_l.setStyleSheet("color:#ef5350;")
+                if not auto_restart:
+                    QMessageBox.warning(self, "Invalid waveform setup", res.error)
+                return
+            chans = res.channels
+            num_points = res.num_points
+            freq = res.frequency
+        else:
+            num_points = len(u0)
+            freq = 1.0 / lt0 if lt0 > 0 else 1.0
 
         def _send():
             with self.w._lock:
@@ -459,35 +476,28 @@ class WaveformTab(QWidget):
                 ok = self.w._put("WaveGen:Run", 0) and ok
                 import time; time.sleep(0.3)
 
-                n = len(u0)
-                ok = self.w._put("WaveGen:NumPoints", n) and ok
+                ok = self.w._put("WaveGen:NumPoints", num_points) and ok
                 ok = self.w._put("WaveGen:Frequency", freq) and ok
                 ok = self.w._put("WaveGen:MarkerEnable", 1) and ok
                 ok = self.w._put("WaveGen:MarkerWidth", 10) and ok
 
-                self.w.load_done.emit(f"Sending AO0 ({n})...")
-                ok = self.w._put("WaveGen:Ch0:UserWF", u0) and ok
-                ok = self.w._put("WaveGen:Ch0:Amplitude", 1.0) and ok
-                ok = self.w._put("WaveGen:Ch0:Offset", 0.0) and ok
-                ok = self.w._put("WaveGen:Ch0:Enable", 1) and ok
-
-                self.w.load_done.emit(f"Sending AO1 ({n})...")
-                ok = self.w._put("WaveGen:Ch1:UserWF", v0) and ok
-                ok = self.w._put("WaveGen:Ch1:Amplitude", 1.0) and ok
-                ok = self.w._put("WaveGen:Ch1:Offset", 0.0) and ok
-                ok = self.w._put("WaveGen:Ch1:Enable", 1) and ok
-
-                if u1 is not None and v1 is not None:
-                    self.w.load_done.emit("Sending AO2/AO3...")
-                    ok = self.w._put("WaveGen:Ch2:UserWF", u1) and ok
-                    ok = self.w._put("WaveGen:Ch2:Amplitude", 1.0) and ok
-                    ok = self.w._put("WaveGen:Ch2:Offset", 0.0) and ok
-                    ok = self.w._put("WaveGen:Ch2:Enable", 1) and ok
-                    ok = self.w._put("WaveGen:Ch3:UserWF", v1) and ok
-                    ok = self.w._put("WaveGen:Ch3:Amplitude", 1.0) and ok
-                    ok = self.w._put("WaveGen:Ch3:Offset", 0.0) and ok
-                    ok = self.w._put("WaveGen:Ch3:Enable", 1) and ok
+                if both:
+                    self.w.load_done.emit(f"Sending AO0..3 ({num_points})...")
+                    for ch in range(4):
+                        ok = self.w._put(f"WaveGen:Ch{ch}:UserWF", chans[ch]) and ok
+                        ok = self.w._put(f"WaveGen:Ch{ch}:Amplitude", 1.0) and ok
+                        ok = self.w._put(f"WaveGen:Ch{ch}:Offset", 0.0) and ok
+                        ok = self.w._put(f"WaveGen:Ch{ch}:Enable", 1) and ok
                 else:
+                    self.w.load_done.emit(f"Sending AO0/AO1 ({num_points})...")
+                    ok = self.w._put("WaveGen:Ch0:UserWF", u0) and ok
+                    ok = self.w._put("WaveGen:Ch0:Amplitude", 1.0) and ok
+                    ok = self.w._put("WaveGen:Ch0:Offset", 0.0) and ok
+                    ok = self.w._put("WaveGen:Ch0:Enable", 1) and ok
+                    ok = self.w._put("WaveGen:Ch1:UserWF", v0) and ok
+                    ok = self.w._put("WaveGen:Ch1:Amplitude", 1.0) and ok
+                    ok = self.w._put("WaveGen:Ch1:Offset", 0.0) and ok
+                    ok = self.w._put("WaveGen:Ch1:Enable", 1) and ok
                     ok = self.w._put("WaveGen:Ch2:Enable", 0) and ok
                     ok = self.w._put("WaveGen:Ch3:Enable", 0) and ok
 
@@ -497,9 +507,9 @@ class WaveformTab(QWidget):
                 if auto_restart and self._is_running and ok:
                     ok = self.w._put("WaveGen:Continuous", 1) and ok
                     ok = self.w._put("WaveGen:Run", 1) and ok
-                    self.w.load_done.emit(f"Running ({n} pts)" if ok else "Waveform load failed")
+                    self.w.load_done.emit(f"Running ({num_points} pts)" if ok else "Waveform load failed")
                 else:
-                    self.w.load_done.emit(f"Loaded {n} pts. Press Start." if ok else "Waveform load failed")
+                    self.w.load_done.emit(f"Loaded {num_points} pts. Press Start." if ok else "Waveform load failed")
         threading.Thread(target=_send, daemon=True).start()
 
         # Save config after loading
@@ -646,15 +656,19 @@ class WaveformTab(QWidget):
             pair1_ok, pair1_msg = self._validate_pair(self.pair1)
             if not pair1_ok:
                 return False, pair1_msg
-            if len(self.pair0.get_output_data()[0]) != len(self.pair1.get_output_data()[0]):
-                return False, "AO0/1 and AO2/3 must have the same number of points when loaded together."
-            lt0 = self.pair0.get_output_data()[2]
-            lt1 = self.pair1.get_output_data()[2]
-            if abs(lt0 - lt1) > 1e-9:
-                return False, "AO0/1 and AO2/3 must use the same loop time when loaded together."
+            if not pair0_ok:
+                return False, pair0_msg
+            # Different loop times / point counts are allowed: the builder
+            # quantizes the slower pair to an integer multiple of the faster
+            # pair's period on the shared AO clock (ZOH). Reject only when the
+            # combined buffer will not fit the hardware buffer.
+            u0, v0, lt0 = self.pair0.get_output_data()
+            u1, v1, lt1 = self.pair1.get_output_data()
+            res = build_dual_pair_buffers(u0, v0, lt0, u1, v1, lt1)
+            if not res.ok:
+                return False, res.error
+            return True, "Validation: " + res.info
 
-        if pair0_ok and pair1_loaded:
-            return True, "Validation: both AO pairs are consistent and within range."
         if pair0_ok:
             return True, "Validation: AO0/1 is ready."
         return True, "Validation: outputs can be activated; load a pair before starting."
