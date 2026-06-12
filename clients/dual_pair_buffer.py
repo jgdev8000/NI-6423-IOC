@@ -22,12 +22,15 @@ def zoh_resample(arr, target_len):
     """Zero-order-hold resample a 1D array to target_len samples.
 
     Upsampling repeats (holds) samples; downsampling decimates. Output index j
-    maps to source index floor(j * n / target_len).
+    maps to source index floor(j * n / target_len). If target_len is 1, the
+    first input sample is returned.
     """
     a = np.asarray(arr, dtype=float)
     n = len(a)
     if n == 0:
         raise ValueError("zoh_resample: empty input")
+    if target_len <= 0:
+        raise ValueError(f"zoh_resample: target_len must be positive, got {target_len}")
     if target_len == n:
         return a.copy()
     idx = (np.arange(target_len) * n) // target_len
