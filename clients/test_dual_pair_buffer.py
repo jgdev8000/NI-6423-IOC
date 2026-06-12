@@ -106,5 +106,45 @@ class TestBuildDualPair(unittest.TestCase):
         self.assertEqual(r.channels, [])
 
 
+class TestBuildDualPairEdges(unittest.TestCase):
+    def test_reject_when_exceeds_max_points(self):
+        u0 = _ramp(4000)
+        r = build_dual_pair_buffers(u0, u0, 0.1, u0, u0, 0.3)  # L = 3*4000
+        self.assertFalse(r.ok)
+        self.assertIn("12000", r.error)
+        self.assertIn("10000", r.error)
+        self.assertEqual(r.channels, [])
+
+    def test_clamp_below_min_period(self):
+        u0 = _ramp(100)
+        r = build_dual_pair_buffers(u0, u0, 0.05, u0, u0, 0.05)
+        self.assertTrue(r.ok)
+        self.assertAlmostEqual(r.base_period, 0.1)
+        self.assertEqual(r.ticks, (1, 1))
+        self.assertIn("raised to 0.100s", r.info)
+
+    def test_clamp_one_side_changes_ratio(self):
+        u0 = _ramp(100)
+        r = build_dual_pair_buffers(u0, u0, 0.05, u0, u0, 0.2)  # 0.05->0.1 base
+        self.assertAlmostEqual(r.base_period, 0.1)
+        self.assertEqual(r.ticks, (1, 2))
+
+    def test_equal_period_unequal_points_resamples_and_warns(self):
+        u0 = _ramp(100)
+        u1 = _ramp(50)
+        r = build_dual_pair_buffers(u0, u0, 0.1, u1, u1, 0.1)
+        self.assertTrue(r.ok)
+        self.assertEqual(r.num_points, 100)            # S = pair0 length
+        self.assertEqual(len(r.channels[2]), 100)
+        self.assertIn("AO2/3 resampled 50->100", r.info)
+        np.testing.assert_array_equal(r.channels[2], zoh_resample(u1, 100))
+
+    def test_at_limit_is_accepted(self):
+        u0 = _ramp(5000)
+        r = build_dual_pair_buffers(u0, u0, 0.1, u0, u0, 0.2)  # L = 2*5000
+        self.assertTrue(r.ok)
+        self.assertEqual(r.num_points, 10000)
+
+
 if __name__ == "__main__":
     unittest.main()
