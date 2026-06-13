@@ -7,6 +7,35 @@ corrupt the file — the previous good copy survives.
 """
 import json
 import os
+import sys
+
+
+def default_path(filename="mems_settings.json"):
+    """Return a persistent, writable path for the settings file.
+
+    In a normal (source) run this sits next to the code. In a frozen PyInstaller
+    build, __file__ points into the temporary _MEIPASS extraction dir that is
+    deleted on exit, so settings written there are lost. When frozen, prefer a
+    folder next to the .exe (portable) if it is writable, else fall back to a
+    per-user app-data directory.
+    """
+    if getattr(sys, "frozen", False):
+        appdata = os.environ.get("APPDATA") or os.path.expanduser("~")
+        candidates = [os.path.dirname(sys.executable),
+                      os.path.join(appdata, "MEMS-UI")]
+    else:
+        candidates = [os.path.dirname(os.path.abspath(__file__))]
+    for d in candidates:
+        try:
+            os.makedirs(d, exist_ok=True)
+            probe = os.path.join(d, ".write_test")
+            with open(probe, "w") as f:
+                f.write("")
+            os.remove(probe)
+            return os.path.join(d, filename)
+        except Exception:
+            continue
+    return os.path.join(os.path.expanduser("~"), filename)  # last resort
 
 
 def load_settings(path):
@@ -32,5 +61,6 @@ def update_section(path, key, data):
             f.flush()
             os.fsync(f.fileno())
         os.replace(tmp, path)
-    except Exception:
-        pass
+    except Exception as exc:
+        # Don't crash the UI on a write failure, but don't hide it either.
+        print(f"settings_store: could not write {path}: {exc}", file=sys.stderr)

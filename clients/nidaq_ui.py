@@ -22,7 +22,7 @@ from tab_ao import AOTab
 from tab_ai import AITab
 from tab_dio import DIOTab
 from tab_counters import CountersTab
-from settings_store import load_settings, update_section
+from settings_store import load_settings, update_section, default_path
 
 DARK_STYLE = """
 QMainWindow, QWidget { background-color: #1b1d23; color: #d4d4d8;
@@ -65,7 +65,7 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(1100, 600)
         self.resize(1250, 700)
 
-        cfg_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mems_settings.json")
+        cfg_path = default_path()  # persistent + writable, incl. when frozen into an .exe
         self.cfg_path = cfg_path
 
         self.worker = EpicsWorker()
