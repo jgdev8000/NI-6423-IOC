@@ -178,57 +178,10 @@ class EpicsWorker(QObject):
             })
         self._bg(_do)
 
-    def send_start(self):
-        self._bg(lambda: (self._put("WaveGen:Continuous", 1), self._put("WaveGen:Run", 1)))
-
-    def send_stop(self):
-        self._bg(lambda: self._put_nowait("WaveGen:Run", 0))
-
-    def send_loop_time(self, freq):
-        def _do():
-            was = self._get("WaveGen:Run")
-            if was: self._put("WaveGen:Run", 0)
-            self._put("WaveGen:Frequency", freq)
-            if was: self._put("WaveGen:Run", 1)
-        self._bg(_do)
-
-    def send_waveforms(self, u, v, su, sv, ou, ov, freq, me, mw, restart=False):
-        def _do():
-            with self._lock:
-                self.load_done.emit("Stopping...")
-                self._put("WaveGen:Run", 0)
-                import time; time.sleep(0.3)
-                self._put("WaveGen:Ch0:Amplitude", su)
-                self._put("WaveGen:Ch1:Amplitude", sv)
-                self._put("WaveGen:Ch0:Offset", ou)
-                self._put("WaveGen:Ch1:Offset", ov)
-                self._put("WaveGen:Frequency", freq)
-                self._put("WaveGen:MarkerEnable", int(me))
-                self._put("WaveGen:MarkerWidth", int(mw))
-                n = len(u)
-                self._put("WaveGen:NumPoints", n)
-                self.load_done.emit(f"Sending AO0 ({n})...")
-                self._put("WaveGen:Ch0:UserWF", u)
-                self.load_done.emit(f"Sending AO1 ({n})...")
-                self._put("WaveGen:Ch1:UserWF", v)
-                if restart:
-                    self._put("WaveGen:Continuous", 1)
-                    self._put("WaveGen:Run", 1)
-                    self.load_done.emit(f"Running ({n} pts)")
-                else:
-                    self.load_done.emit(f"Loaded {n} pts. Press Start.")
-        self._bg(_do)
-
-    def send_settings(self, su, sv, ou, ov, freq, me, mw):
-        def _do():
-            self._put("WaveGen:Ch0:Amplitude", su)
-            self._put("WaveGen:Ch1:Amplitude", sv)
-            self._put("WaveGen:Ch0:Offset", ou)
-            self._put("WaveGen:Ch1:Offset", ov)
-            self._put("WaveGen:Frequency", freq)
-            self._put("WaveGen:MarkerEnable", int(me))
-            self._put("WaveGen:MarkerWidth", int(mw))
-        self._bg(_do)
+    # Legacy single-pair send_* helpers removed: unused and superseded by the
+    # WaveformTab load/stop logic (which uses non-blocking Run writes). They
+    # held the worker lock around blocking caput(wait=True) on the Run busy
+    # record, which is exactly the stall pattern we eliminated everywhere else.
 
     def send_dio(self, line, value):
         self._bg(lambda: self._put(f"DIO:{line}:Out", int(value)))
