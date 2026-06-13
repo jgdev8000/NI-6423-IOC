@@ -6,6 +6,12 @@ epicsEnvSet("IOC",    "iocnidaq")
 epicsEnvSet("PREFIX", "MEMS:")
 epicsEnvSet("EPICS_CA_MAX_ARRAY_BYTES", "100000")
 
+## Serve Channel Access only on the private instrument subnet (192.168.1.0/24).
+## Bind the CA server to the private NIC and beacon only on that subnet, so the
+## IOC is not reachable from / advertised on the public interface.
+epicsEnvSet("EPICS_CAS_INTF_ADDR_LIST",   "192.168.1.7")
+epicsEnvSet("EPICS_CAS_BEACON_ADDR_LIST", "192.168.1.255")
+
 cd "${TOP}"
 
 ## Register all support components

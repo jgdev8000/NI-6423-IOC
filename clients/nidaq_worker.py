@@ -1,6 +1,12 @@
 """EPICS Channel Access worker — all CA calls in background threads."""
 import os, threading
 os.environ.setdefault("EPICS_CA_MAX_ARRAY_BYTES", "100000")
+# Keep all Channel Access traffic on the private instrument subnet
+# (192.168.1.0/24). Broadcast to the subnet rather than a single host so the
+# search reaches the nidaq IOC among the several IOCs that share UDP 5064 on
+# the server. setdefault lets a real environment variable still override these.
+os.environ.setdefault("EPICS_CA_ADDR_LIST", "192.168.1.255")
+os.environ.setdefault("EPICS_CA_AUTO_ADDR_LIST", "NO")
 
 from PyQt6.QtCore import QObject, pyqtSignal
 
