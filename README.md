@@ -217,6 +217,28 @@ Current UI behavior:
 - the AO, DIO, and counter tabs poll IOC state and sync their controls from live PV values
 - Channel Access write failures are surfaced in the main window status bar
 
+### AO0/1 and AO2/3 loop times
+
+AO0:3 share a single hardware sample clock, so the two pairs cannot run at
+arbitrary independent periods. When both pairs are loaded together the UI
+quantizes them to an integer ratio:
+
+- The faster of the two requested loop times becomes the **base period**
+  (minimum 0.1 s, which is also the timing resolution).
+- The slower pair's period is rounded to the nearest integer multiple of the
+  base period: `ticks = round(period / base)` (minimum 1). Its effective
+  period is `ticks x base` and is shown in the validation label.
+- The faster pair's pattern is tiled to repeat within the combined buffer; the
+  slower pair's pattern is stretched across it with a **zero-order hold** (each
+  native sample held for an integer number of output samples).
+- The combined buffer is sent as one continuous AO generation with
+  `NumPoints = L` and `Frequency = 1 / (slowest effective period)`; the IOC
+  reconstructs the sample rate as `NumPoints x Frequency`.
+- If the combined buffer would exceed 10000 points the load is rejected; reduce
+  the point count or use a smaller ratio.
+
+Equal loop times update all four channels together (original behavior).
+
 Client-side Python dependencies, based on the checked-in UI code:
 
 - `PyQt6`
