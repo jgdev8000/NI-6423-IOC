@@ -22,6 +22,7 @@ from tab_ao import AOTab
 from tab_ai import AITab
 from tab_dio import DIOTab
 from tab_counters import CountersTab
+from settings_store import load_settings, update_section
 
 DARK_STYLE = """
 QMainWindow, QWidget { background-color: #1b1d23; color: #d4d4d8;
@@ -65,6 +66,7 @@ class MainWindow(QMainWindow):
         self.resize(1250, 700)
 
         cfg_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mems_settings.json")
+        self.cfg_path = cfg_path
 
         self.worker = EpicsWorker()
         self.worker.operation_error.connect(self._show_error)
@@ -72,7 +74,7 @@ class MainWindow(QMainWindow):
         tabs = QTabWidget()
         self.wf_tab = WaveformTab(self.worker, cfg_path)
         self.ao_tab = AOTab(self.worker)
-        self.ai_tab = AITab(self.worker)
+        self.ai_tab = AITab(self.worker, cfg_path)
         self.dio_tab = DIOTab(self.worker)
         self.ctr_tab = CountersTab(self.worker)
 
@@ -84,6 +86,10 @@ class MainWindow(QMainWindow):
 
         self.setCentralWidget(tabs)
         self._tabs = tabs
+
+        # Restore window geometry + last active tab, and save on tab change.
+        self._restore_window()
+        self._tabs.currentChanged.connect(lambda _: self._save_window())
 
         # Status poll
         self.poll_timer = QTimer()
@@ -106,6 +112,26 @@ class MainWindow(QMainWindow):
     def _show_error(self, message):
         self.statusBar().showMessage(message, 5000)
 
+    def _restore_window(self):
+        w = load_settings(self.cfg_path).get("window", {})
+        geo = w.get("geometry")
+        if isinstance(geo, list) and len(geo) == 4:
+            try:
+                self.resize(int(geo[2]), int(geo[3]))
+                self.move(int(geo[0]), int(geo[1]))
+            except (TypeError, ValueError):
+                pass
+        idx = w.get("tab")
+        if isinstance(idx, int) and 0 <= idx < self._tabs.count():
+            self._tabs.setCurrentIndex(idx)
+
+    def _save_window(self):
+        g = self.geometry()
+        update_section(self.cfg_path, "window", {
+            "geometry": [g.x(), g.y(), g.width(), g.height()],
+            "tab": self._tabs.currentIndex(),
+        })
+
     def closeEvent(self, event):
         self.poll_timer.stop()
         self.glow_timer.stop()
@@ -113,6 +139,7 @@ class MainWindow(QMainWindow):
         self.worker._put_nowait("WaveGen:Run", 0)
         self.wf_tab._outputs_active = False
         self.wf_tab.save_settings()
+        self._save_window()
         self.worker.shutdown()
         event.accept()
 

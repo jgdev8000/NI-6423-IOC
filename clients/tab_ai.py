@@ -9,6 +9,7 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
+from settings_store import load_settings, update_section
 
 BG="#1b1d23"; AXB="#22252d"; GC="#33363f"; TC="#b0b4bc"
 
@@ -52,15 +53,18 @@ class AIAcqPlot(FigureCanvas):
         self.draw()
 
 class AITab(QWidget):
-    def __init__(self, worker):
+    def __init__(self, worker, config_path=None):
         super().__init__()
         self.w = worker
+        self.cfg_path = config_path
+        self._restoring = False
         self.w.ai_update.connect(self._on_ai)
         self.w.ai_acq_update.connect(self._on_ai_acq)
         self._acq_meta = {"rate": 0.0, "num_acquired": 0}
         self._acq_cache = {}
         self._pending_export_path = None
         self._build()
+        self._restore_settings()
 
     def _build(self):
         main = QHBoxLayout(self)
@@ -140,6 +144,46 @@ class AITab(QWidget):
         right.addWidget(self.plot, stretch=1)
         right.addStretch()
         main.addLayout(right, stretch=1)
+
+        # Persist acquisition settings on change.
+        self.rate_e.editingFinished.connect(self._save_settings)
+        self.npts_e.editingFinished.connect(self._save_settings)
+        self.trig.currentIndexChanged.connect(self._save_settings)
+        self.clk.currentIndexChanged.connect(self._save_settings)
+        self.display_ch.currentIndexChanged.connect(self._save_settings)
+
+    def _save_settings(self, *args):
+        if self._restoring or not self.cfg_path:
+            return
+        update_section(self.cfg_path, "ai_settings", {
+            "rate": self.rate_e.text(),
+            "npts": self.npts_e.text(),
+            "trigger": self.trig.currentIndex(),
+            "clock": self.clk.currentIndex(),
+            "display_ch": self.display_ch.currentIndex(),
+        })
+
+    def _restore_settings(self):
+        if not self.cfg_path:
+            return
+        s = load_settings(self.cfg_path).get("ai_settings", {})
+        if not s:
+            return
+        self._restoring = True
+        try:
+            self.rate_e.setText(str(s.get("rate", self.rate_e.text())))
+            self.npts_e.setText(str(s.get("npts", self.npts_e.text())))
+            ti = int(s.get("trigger", 0))
+            if 0 <= ti < self.trig.count():
+                self.trig.setCurrentIndex(ti)
+            ci = int(s.get("clock", 0))
+            if 0 <= ci < self.clk.count():
+                self.clk.setCurrentIndex(ci)
+            di = int(s.get("display_ch", 0))
+            if 0 <= di < self.display_ch.count():
+                self.display_ch.setCurrentIndex(di)
+        finally:
+            self._restoring = False
 
     def _on_ai(self, vals):
         for i, v in enumerate(vals):

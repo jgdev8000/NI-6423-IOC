@@ -3,12 +3,13 @@ import os, json, numpy as np, threading
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QGroupBox, QLabel, QLineEdit, QPushButton, QComboBox, QCheckBox,
     QFileDialog, QMessageBox, QSplitter)
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QFont
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 from waveform_filter import waveform_filter, load_mat_pattern
 from dual_pair_buffer import build_dual_pair_buffers
+from settings_store import load_settings, update_section
 
 BG="#1b1d23"; AXB="#22252d"; GC="#33363f"; TC="#b0b4bc"
 COLORS=["#4fc3f7","#ffb74d","#ce93d8","#a5d6a7"]
@@ -145,16 +146,23 @@ class PairControls(QWidget):
         self.loop_e = QLineEdit("1.0"); self.loop_e.setMinimumWidth(40)
         tl.addWidget(self.loop_e, 0, 1, 1, 2)
         self.filt_en = QCheckBox("Filter")
-        self.filt_en.stateChanged.connect(self._preview)
+        # Toggling the filter / changing the cutoff reloads to the IOC and
+        # restarts automatically if the pattern is running (no manual stop/start).
+        self.filt_en.stateChanged.connect(self._apply)
         tl.addWidget(self.filt_en, 1, 0)
         tl.addWidget(QLabel("Cut:"), 1, 1)
         self.cut_e = QLineEdit("1000"); self.cut_e.setMinimumWidth(40)
-        self.cut_e.editingFinished.connect(self._preview)
+        self.cut_e.editingFinished.connect(self._apply)
         tl.addWidget(self.cut_e, 1, 2)
         fa = QPushButton("Apply"); fa.setStyleSheet("font-size:10px;padding:2px;")
         fa.clicked.connect(self._apply)
         tl.addWidget(fa, 2, 0, 1, 3)
         layout.addWidget(tg, stretch=1)
+
+        # Persist every parameter change via the tab's debounced autosave.
+        for w in (self.su, self.sv, self.ou, self.ov, self.loop_e, self.cut_e):
+            w.editingFinished.connect(self.tab._autosave)
+        self.filt_en.stateChanged.connect(self.tab._autosave)
 
         # Per-pair start/stop
         rg = QGroupBox("Output")
@@ -254,6 +262,7 @@ class PairControls(QWidget):
             self.ul.setText(os.path.basename(p["ao0"]))
             self.vl.setText(os.path.basename(p["ao1"]))
         self._preview()
+        self.tab._autosave()
 
     def set_folder(self, folder):
         """Set pattern folder (called from restore)."""
@@ -273,12 +282,14 @@ class PairControls(QWidget):
         if p:
             self._u_path=p; self.ul.setText(os.path.basename(p))
             self.u_data=np.loadtxt(p); self._preview()
+            self.tab._autosave()
 
     def _browse_v(self):
         p = self._dlg(f"Select AO{self.ch_b} CSV")
         if p:
             self._v_path=p; self.vl.setText(os.path.basename(p))
             self.v_data=np.loadtxt(p); self._preview()
+            self.tab._autosave()
 
     def _browse_mat(self):
         p = self._dlg("Select .mat", "MAT (*.mat);;All (*)")
@@ -336,6 +347,14 @@ class WaveformTab(QWidget):
         self.w = worker
         self.cfg_path = config_path
         self._dialog_open = False; self._is_running = False
+        # Debounced autosave: any parameter change schedules a write a short
+        # time later, so a crash/PC restart preserves the latest settings
+        # (not just a clean close). _restoring suppresses saves during restore.
+        self._restoring = False
+        self._save_timer = QTimer(self)
+        self._save_timer.setSingleShot(True)
+        self._save_timer.setInterval(400)
+        self._save_timer.timeout.connect(self._save_config)
         self._build()
         self._restore()
         self.w.status_update.connect(self._on_status)
@@ -364,6 +383,7 @@ class WaveformTab(QWidget):
         top.addWidget(QLabel("Trigger:"))
         self.trig_src = QComboBox()
         self.trig_src.addItems(["Software","PFI0","PFI1","PFI2","PFI3","PFI4","PFI5","PFI6","PFI7"])
+        self.trig_src.currentIndexChanged.connect(self._autosave)
         top.addWidget(self.trig_src)
         outer.addLayout(top)
 
@@ -530,13 +550,16 @@ class WaveformTab(QWidget):
                 QMessageBox.warning(self, "Invalid waveform setup", message)
             return
         freq = 1.0 / lt if lt > 0 else 1.0
-        was_running = self._is_running
         always_start = not restart_if_running  # Start button always starts
-        should_restart = always_start or (restart_if_running and was_running)
 
         def _send():
             with self.w._lock:
                 ok = True
+                # Read the live run-state from the IOC rather than the cached
+                # poll flag, which can be up to 1 s stale and make Apply fail
+                # to restart a pattern that is actually running.
+                was_running = self.w._get("WaveGen:Run", as_string=True) == "Run"
+                should_restart = always_start or (restart_if_running and was_running)
                 self.w.load_done.emit("Stopping...")
                 ok = self.w._put("WaveGen:Run", 0) and ok
                 import time; time.sleep(0.3)
@@ -570,26 +593,46 @@ class WaveformTab(QWidget):
                         f"Running AO{pair.ch_a}/AO{pair.ch_b} ({n} pts)" if ok else "Waveform load failed")
                 else:
                     self.w.load_done.emit(f"Loaded {n} pts. Press Start." if ok else "Waveform load failed")
+            # Refresh run-state immediately instead of waiting for the 1 s poll.
+            self.w.poll_status()
         threading.Thread(target=_send, daemon=True).start()
 
     def _stop(self):
-        """Stop output and return all AO channels to 0V (center)."""
+        """Stop output and hold at the coherent position (pattern 0,0 + offset).
+
+        The 'coherent' pattern is identically zero, so loading it with the
+        configured per-pair offset is equivalent to holding each channel at
+        its offset (0*scale + offset = offset). Read the offsets in the GUI
+        thread so we don't touch Qt widgets from the worker thread.
+        """
+        o0u, o0v = self.pair0._get_params()[2:4]
+        o1u, o1v = self.pair1._get_params()[2:4]
+        offsets = [o0u, o0v, o1u, o1v]  # ch0..ch3
+
         def _do():
-            self.w._put_nowait("WaveGen:Run", 0)
-            import time; time.sleep(0.5)
-            # Park at 0V
+            import time
             import numpy as np
-            zero = np.array([0.0], dtype=np.float64)
-            self.w._put_nowait("WaveGen:NumPoints", 1)
-            for ch in range(4):
-                self.w._put_nowait(f"WaveGen:Ch{ch}:UserWF", zero)
-                self.w._put_nowait(f"WaveGen:Ch{ch}:Amplitude", 1.0)
-                self.w._put_nowait(f"WaveGen:Ch{ch}:Offset", 0.0)
-            self.w._put_nowait("WaveGen:Continuous", 0)
-            self.w._put_nowait("WaveGen:Run", 1)
-            time.sleep(0.2)
-            self.w._put_nowait("WaveGen:Run", 0)
-            self.w.load_done.emit("Stopped — centered at 0V")
+            # Hold the worker lock so a concurrent load can't interleave, and use
+            # confirmed (blocking) writes on the Run PV so the stop can't be lost.
+            with self.w._lock:
+                self.w._put("WaveGen:Run", 0)
+                time.sleep(0.3)
+                # Coherent pattern: a single 0-sample per channel, biased by the
+                # channel's offset so the mirror parks at (0,0)+offset.
+                self.w._put("WaveGen:NumPoints", 1)
+                for ch in range(4):
+                    sample = np.array([offsets[ch]], dtype=np.float64)
+                    self.w._put_nowait(f"WaveGen:Ch{ch}:UserWF", sample)
+                    self.w._put_nowait(f"WaveGen:Ch{ch}:Amplitude", 1.0)
+                    self.w._put_nowait(f"WaveGen:Ch{ch}:Offset", 0.0)
+                self.w._put("WaveGen:Continuous", 0)
+                self.w._put("WaveGen:Run", 1)   # finite 1-pt gen → emits coherent sample
+                time.sleep(0.2)
+                self.w._put("WaveGen:Run", 0)   # confirmed final stop
+            self.w.load_done.emit("Stopped — coherent (0,0 + offset)")
+            # Re-read run-state now so the UI reflects the stop immediately and
+            # can't latch on the brief re-arm Run=1 caught by the 1 s poll.
+            self.w.poll_status()
         import threading
         threading.Thread(target=_do, daemon=True).start()
 
@@ -679,12 +722,15 @@ class WaveformTab(QWidget):
 
     # --- Config ---
 
+    def _autosave(self, *args):
+        """Schedule a debounced save. Connected to all parameter widgets."""
+        if self._restoring:
+            return
+        self._save_timer.start()
+
     def _save_config(self):
         try:
-            try:
-                with open(self.cfg_path) as f: cfg=json.load(f)
-            except: cfg={}
-            cfg["settings"]={
+            update_section(self.cfg_path, "settings", {
                 "pattern_folder_0":self.pair0._pattern_folder,
                 "pattern_folder_1":self.pair1._pattern_folder,
                 "loop_time_0":self.pair0.loop_e.text(),
@@ -699,16 +745,20 @@ class WaveformTab(QWidget):
                 "filter_enable_1":self.pair1.filt_en.isChecked(),
                 "cutoff_1":self.pair1.cut_e.text(),
                 "last_u0":self.pair0._u_path,"last_v0":self.pair0._v_path,
-                "last_u1":self.pair1._u_path,"last_v1":self.pair1._v_path}
-            with open(self.cfg_path,"w") as f: json.dump(cfg,f,indent=2)
+                "last_u1":self.pair1._u_path,"last_v1":self.pair1._v_path})
         except: pass
 
     def _restore(self):
-        try:
-            with open(self.cfg_path) as f: cfg = json.load(f)
-        except: cfg = {}
+        cfg = load_settings(self.cfg_path)
         s = cfg.get("settings", {})
         if not s: return
+        self._restoring = True
+        try:
+            self._restore_settings(s)
+        finally:
+            self._restoring = False
+
+    def _restore_settings(self, s):
         # Restore pattern folders
         self.pair0.set_folder(s.get("pattern_folder_0", ""))
         self.pair1.set_folder(s.get("pattern_folder_1", ""))
