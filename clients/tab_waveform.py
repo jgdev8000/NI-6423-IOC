@@ -146,13 +146,14 @@ class PairControls(QWidget):
         self.loop_e = QLineEdit("1.0"); self.loop_e.setMinimumWidth(40)
         tl.addWidget(self.loop_e, 0, 1, 1, 2)
         self.filt_en = QCheckBox("Filter")
-        # Toggling the filter / changing the cutoff reloads to the IOC and
-        # restarts automatically if the pattern is running (no manual stop/start).
-        self.filt_en.stateChanged.connect(self._apply)
+        # Toggling the filter / changing the cutoff only updates the preview plot.
+        # Use the "Apply" button to push the change to the IOC. (Auto-reloading
+        # here caused the UI to block on the Run busy-record put.)
+        self.filt_en.stateChanged.connect(self._preview)
         tl.addWidget(self.filt_en, 1, 0)
         tl.addWidget(QLabel("Cut:"), 1, 1)
         self.cut_e = QLineEdit("1000"); self.cut_e.setMinimumWidth(40)
-        self.cut_e.editingFinished.connect(self._apply)
+        self.cut_e.editingFinished.connect(self._preview)
         tl.addWidget(self.cut_e, 1, 2)
         fa = QPushButton("Apply"); fa.setStyleSheet("font-size:10px;padding:2px;")
         fa.clicked.connect(self._apply)
@@ -493,7 +494,7 @@ class WaveformTab(QWidget):
             with self.w._lock:
                 ok = True
                 self.w.load_done.emit("Stopping...")
-                ok = self.w._put("WaveGen:Run", 0) and ok
+                self.w._put_nowait("WaveGen:Run", 0)  # busy record: never block the CA context
                 import time; time.sleep(0.3)
 
                 ok = self.w._put("WaveGen:NumPoints", num_points) and ok
@@ -526,7 +527,7 @@ class WaveformTab(QWidget):
 
                 if auto_restart and self._is_running and ok:
                     ok = self.w._put("WaveGen:Continuous", 1) and ok
-                    ok = self.w._put("WaveGen:Run", 1) and ok
+                    self.w._put_nowait("WaveGen:Run", 1)  # busy record: never block the CA context
                     self.w.load_done.emit(f"Running ({num_points} pts)" if ok else "Waveform load failed")
                 else:
                     self.w.load_done.emit(f"Loaded {num_points} pts. Press Start." if ok else "Waveform load failed")
@@ -561,7 +562,7 @@ class WaveformTab(QWidget):
                 was_running = self.w._get("WaveGen:Run", as_string=True) == "Run"
                 should_restart = always_start or (restart_if_running and was_running)
                 self.w.load_done.emit("Stopping...")
-                ok = self.w._put("WaveGen:Run", 0) and ok
+                self.w._put_nowait("WaveGen:Run", 0)  # busy record: never block the CA context
                 import time; time.sleep(0.3)
                 n = len(u)
                 ok = self.w._put("WaveGen:NumPoints", n) and ok
@@ -588,7 +589,7 @@ class WaveformTab(QWidget):
 
                 if should_restart and ok:
                     ok = self.w._put("WaveGen:Continuous", 1) and ok
-                    ok = self.w._put("WaveGen:Run", 1) and ok
+                    self.w._put_nowait("WaveGen:Run", 1)  # busy record: never block the CA context
                     self.w.load_done.emit(
                         f"Running AO{pair.ch_a}/AO{pair.ch_b} ({n} pts)" if ok else "Waveform load failed")
                 else:
