@@ -146,6 +146,7 @@ class PairControls(QWidget):
         self.loop_e = QLineEdit("1.0"); self.loop_e.setMinimumWidth(40)
         tl.addWidget(self.loop_e, 0, 1, 1, 2)
         self.filt_en = QCheckBox("Filter")
+        self.filt_en.setChecked(True)  # filter ON by default (set before signals are wired)
         # Toggling the filter / changing the cutoff only updates the preview plot.
         # Use the "Apply" button to push the change to the IOC. (Auto-reloading
         # here caused the UI to block on the Run busy-record put.)
@@ -768,13 +769,13 @@ class WaveformTab(QWidget):
         self.pair0.sv.setText(s.get("scale_v0",s.get("scale_v","1.0")))
         self.pair0.ou.setText(s.get("offset_u0",s.get("offset_u","0.0")))
         self.pair0.ov.setText(s.get("offset_v0",s.get("offset_v","0.0")))
-        self.pair0.filt_en.setChecked(s.get("filter_enable_0",s.get("filter_enable",False)))
+        self.pair0.filt_en.setChecked(s.get("filter_enable_0",s.get("filter_enable",True)))
         self.pair0.cut_e.setText(s.get("cutoff_0",s.get("cutoff","1000")))
         self.pair1.su.setText(s.get("scale_u1","1.0"))
         self.pair1.sv.setText(s.get("scale_v1","1.0"))
         self.pair1.ou.setText(s.get("offset_u1","0.0"))
         self.pair1.ov.setText(s.get("offset_v1","0.0"))
-        self.pair1.filt_en.setChecked(s.get("filter_enable_1",False))
+        self.pair1.filt_en.setChecked(s.get("filter_enable_1",True))
         self.pair1.cut_e.setText(s.get("cutoff_1","1000"))
 
         # Load pair0 files
