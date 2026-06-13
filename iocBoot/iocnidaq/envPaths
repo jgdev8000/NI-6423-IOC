@@ -1,5 +1,5 @@
 epicsEnvSet("IOC","iocnidaq")
-epicsEnvSet("TOP","/opt/iocs/nidaq")
+epicsEnvSet("TOP","/opt/iocs/NI-6423-IOC")
 epicsEnvSet("SUPPORT","/opt/epics/synApps/support")
 epicsEnvSet("ASYN","/opt/epics/synApps/support/asyn-R4-42")
 epicsEnvSet("AUTOSAVE","/opt/epics/synApps/support/autosave-R5-10-2")

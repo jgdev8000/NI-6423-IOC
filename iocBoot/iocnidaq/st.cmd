@@ -127,12 +127,12 @@ cd "${TOP}/iocBoot/${IOC}"
 set_savefile_path(".", "autosave")
 set_requestfile_path(".", "")
 save_restoreSet_DatedBackupFiles(1)
-set_pass0_restoreFile("autosave_mems.sav")
-set_pass1_restoreFile("autosave_mems.sav")
+set_pass0_restoreFile("autosave.sav")
+set_pass1_restoreFile("autosave.sav")
 
 iocInit
 
 ## Start autosave after iocInit
-makeAutosaveFileFromDbInfo("autosave_mems.req", "autosaveFields")
+## autosave.req holds the hand-maintained PV list; it is written to autosave.sav
+## every 10 s and restored at boot by the pass0/pass1 lines above.
 create_monitor_set("autosave.req", 10, "PREFIX=$(PREFIX)")
-create_monitor_set("autosave_mems.req", 10)
