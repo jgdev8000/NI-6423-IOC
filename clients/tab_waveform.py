@@ -769,13 +769,13 @@ class WaveformTab(QWidget):
         self.pair0.sv.setText(s.get("scale_v0",s.get("scale_v","1.0")))
         self.pair0.ou.setText(s.get("offset_u0",s.get("offset_u","0.0")))
         self.pair0.ov.setText(s.get("offset_v0",s.get("offset_v","0.0")))
-        self.pair0.filt_en.setChecked(s.get("filter_enable_0",s.get("filter_enable",True)))
+        self.pair0.filt_en.setChecked(True)  # filter always enabled at startup (ignore saved off)
         self.pair0.cut_e.setText(s.get("cutoff_0",s.get("cutoff","1000")))
         self.pair1.su.setText(s.get("scale_u1","1.0"))
         self.pair1.sv.setText(s.get("scale_v1","1.0"))
         self.pair1.ou.setText(s.get("offset_u1","0.0"))
         self.pair1.ov.setText(s.get("offset_v1","0.0"))
-        self.pair1.filt_en.setChecked(s.get("filter_enable_1",True))
+        self.pair1.filt_en.setChecked(True)  # filter always enabled at startup (ignore saved off)
         self.pair1.cut_e.setText(s.get("cutoff_1","1000"))
 
         # Load pair0 files
