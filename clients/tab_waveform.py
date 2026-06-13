@@ -612,26 +612,24 @@ class WaveformTab(QWidget):
         def _do():
             import time
             import numpy as np
-            # Hold the worker lock so a concurrent load can't interleave, and use
-            # confirmed (blocking) writes on the Run PV so the stop can't be lost.
-            with self.w._lock:
-                self.w._put("WaveGen:Run", 0)
-                time.sleep(0.3)
-                # Coherent pattern: a single 0-sample per channel, biased by the
-                # channel's offset so the mirror parks at (0,0)+offset.
-                self.w._put("WaveGen:NumPoints", 1)
-                for ch in range(4):
-                    sample = np.array([offsets[ch]], dtype=np.float64)
-                    self.w._put_nowait(f"WaveGen:Ch{ch}:UserWF", sample)
-                    self.w._put_nowait(f"WaveGen:Ch{ch}:Amplitude", 1.0)
-                    self.w._put_nowait(f"WaveGen:Ch{ch}:Offset", 0.0)
-                self.w._put("WaveGen:Continuous", 0)
-                self.w._put("WaveGen:Run", 1)   # finite 1-pt gen → emits coherent sample
-                time.sleep(0.2)
-                self.w._put("WaveGen:Run", 0)   # confirmed final stop
-            self.w.load_done.emit("Stopped — coherent (0,0 + offset)")
-            # Re-read run-state now so the UI reflects the stop immediately and
-            # can't latch on the brief re-arm Run=1 caught by the 1 s poll.
+            # Fire-and-forget writes (wait=False): a blocking put on the Run busy
+            # record can stall up to its timeout and, if it held the worker lock,
+            # would wedge every concurrent ca.get (status polls) -> timeouts.
+            self.w._put_nowait("WaveGen:Run", 0)
+            time.sleep(0.5)
+            # Coherent pattern: a single 0-sample per channel, biased by the
+            # channel's offset so the mirror parks at (0,0)+offset.
+            self.w._put_nowait("WaveGen:NumPoints", 1)
+            for ch in range(4):
+                sample = np.array([offsets[ch]], dtype=np.float64)
+                self.w._put_nowait(f"WaveGen:Ch{ch}:UserWF", sample)
+                self.w._put_nowait(f"WaveGen:Ch{ch}:Amplitude", 1.0)
+                self.w._put_nowait(f"WaveGen:Ch{ch}:Offset", 0.0)
+            self.w._put_nowait("WaveGen:Continuous", 0)
+            self.w._put_nowait("WaveGen:Run", 1)   # finite 1-pt gen -> emits coherent sample
+            time.sleep(0.2)
+            self.w._put_nowait("WaveGen:Run", 0)   # final stop
+            self.w.load_done.emit("Stopped - coherent (0,0 + offset)")
             self.w.poll_status()
         import threading
         threading.Thread(target=_do, daemon=True).start()
