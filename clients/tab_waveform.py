@@ -71,6 +71,7 @@ class PairControls(QWidget):
         super().__init__()
         self.ch_a=ch_a; self.ch_b=ch_b; self.w=worker; self.tab=parent_tab
         self.u_data=None; self.v_data=None; self._u_path=""; self._v_path=""
+        self.active=False  # True when this pair is scanning (vs parked at its offset)
         self.plot = None  # set by WaveformTab after construction
         self.setMinimumWidth(180)
         self.setMaximumWidth(300)
@@ -182,15 +183,22 @@ class PairControls(QWidget):
         layout.addWidget(rg, stretch=1)
 
     def _start_pair(self):
-        """Load this pair's data and start."""
+        """Scan this pair; the other pair keeps its current run/park state."""
         if not self.tab._outputs_active:
             QMessageBox.warning(self, "Outputs disabled",
                 "Turn on 'Outputs ON' before starting.")
             return
-        self.tab._load_pair(self, restart_if_running=False)
+        if self.u_data is None or self.v_data is None:
+            QMessageBox.warning(self, "Missing",
+                f"Load AO{self.ch_a}/AO{self.ch_b} pattern first.")
+            return
+        self.active = True
+        self.tab._apply_outputs()
 
     def _stop_pair(self):
-        self.tab._stop()
+        """Park this pair at its offset; the other pair keeps running."""
+        self.active = False
+        self.tab._apply_outputs()
 
     # --- Pattern library ---
     def _scan_folder(self, folder):
@@ -307,9 +315,10 @@ class PairControls(QWidget):
 
     def _apply(self):
         self._preview()
-        # Reload data to IOC with new settings, restart if was running
-        if self.tab._outputs_active:
-            self.tab._load_pair(self, restart_if_running=True)
+        # Re-push to the IOC only if this pair is currently scanning; otherwise
+        # just update the preview (manual Start applies it).
+        if self.tab._outputs_active and self.active:
+            self.tab._apply_outputs()
 
     def _get_params(self):
         try: su=float(self.su.text() or 1)
@@ -433,20 +442,16 @@ class WaveformTab(QWidget):
 
     def _toggle_activate(self, checked):
         if checked:
-            valid, message = self._validate_for_load(require_pair0=False)
-            if not valid:
-                self.activate_btn.setChecked(False)
-                self.validation_l.setText(message)
-                self.validation_l.setStyleSheet("color:#ef5350;")
-                return
-            # Activate outputs
+            # Activate the outputs gate; each pair starts scanning via its Start.
             self._outputs_active = True
             self.activate_btn.setText("Outputs ON")
-            self.status_l.setText("Outputs activated — ready")
+            self.status_l.setText("Outputs activated — press a pair's Start")
         else:
-            # Deactivate: stop and center
+            # Deactivate: park all four at (0,0)+offset.
             self._outputs_active = False
             self.activate_btn.setText("Outputs OFF")
+            self.pair0.active = False
+            self.pair1.active = False
             self._stop()
 
     def _preview(self):
@@ -455,149 +460,88 @@ class WaveformTab(QWidget):
         self.plot0.set_data(u0, v0)
         self.plot1.set_data(u1, v1)
 
-    def _load(self, auto_restart=False):
-        u0, v0, lt0 = self.pair0.get_output_data()
-        u1, v1, lt1 = self.pair1.get_output_data()
+    def _apply_outputs(self):
+        """Build and send the combined 4-channel generation from each pair's
+        run/park state. A scanning pair carries its pattern; a parked pair is
+        held flat at its offset. All four channels always stay in the one
+        shared-clock task. Both pairs parked -> coherent stop (park all four).
 
-        if u0 is None or v0 is None:
-            if not auto_restart:
-                QMessageBox.warning(self, "Missing", "Load AO0/AO1 pattern first.")
+        Single AO clock: toggling either pair rebuilds and restarts the shared
+        task, so the other pair sees a brief (~0.3 s) interruption.
+        """
+        if not self._outputs_active:
+            return
+        import numpy as np
+        p0, p1 = self.pair0, self.pair1
+        a0 = bool(p0.active and p0.u_data is not None and p0.v_data is not None)
+        a1 = bool(p1.active and p1.u_data is not None and p1.v_data is not None)
+        if not (a0 or a1):
+            self._stop()
             return
 
-        valid, message = self._validate_for_load(require_pair0=True)
-        self.validation_l.setText(message)
-        self.validation_l.setStyleSheet("color:#66bb6a;" if valid else "color:#ef5350;")
-        if not valid:
-            if not auto_restart:
-                QMessageBox.warning(self, "Invalid waveform setup", message)
-            return
+        for p, a in ((p0, a0), (p1, a1)):
+            if a:
+                ok, msg = self._validate_pair(p)
+                if not ok:
+                    self.validation_l.setText(msg)
+                    self.validation_l.setStyleSheet("color:#ef5350;")
+                    QMessageBox.warning(self, "Invalid waveform setup", msg)
+                    return
 
-        # When both pairs are loaded they share one AO clock; build one
-        # integer-ratio-tiled buffer (slower pair zero-order-held). A single
-        # loaded pair keeps the simple one-rate path.
-        both = u1 is not None and v1 is not None
-        if both:
-            res = build_dual_pair_buffers(u0, v0, lt0, u1, v1, lt1)
-            if not res.ok:
-                self.validation_l.setText(res.error)
-                self.validation_l.setStyleSheet("color:#ef5350;")
-                if not auto_restart:
-                    QMessageBox.warning(self, "Invalid waveform setup", res.error)
-                return
-            chans = res.channels
-            num_points = res.num_points
-            freq = res.frequency
-        else:
-            num_points = len(u0)
-            freq = 1.0 / lt0 if lt0 > 0 else 1.0
+        u0 = v0 = u1 = v1 = None
+        lt0 = lt1 = 1.0
+        if a0:
+            u0, v0, lt0 = p0.get_output_data()
+        if a1:
+            u1, v1, lt1 = p1.get_output_data()
+        # Park the inactive pair flat at its offset, matched to the active pair's
+        # length/rate so the builder keeps a 1:1 ratio for it.
+        if a0 and not a1:
+            n = len(u0); ou, ov = p1._get_params()[2:4]
+            u1, v1, lt1 = np.full(n, ou), np.full(n, ov), lt0
+        elif a1 and not a0:
+            n = len(u1); ou, ov = p0._get_params()[2:4]
+            u0, v0, lt0 = np.full(n, ou), np.full(n, ov), lt1
+
+        res = build_dual_pair_buffers(u0, v0, lt0, u1, v1, lt1)
+        if not res.ok:
+            self.validation_l.setText(res.error)
+            self.validation_l.setStyleSheet("color:#ef5350;")
+            QMessageBox.warning(self, "Invalid waveform setup", res.error)
+            return
+        self.validation_l.setText("Validation: " + res.info)
+        self.validation_l.setStyleSheet("color:#66bb6a;")
+
+        chans = res.channels
+        num_points = res.num_points
+        freq = res.frequency
+        self.plot0.set_running(a0)
+        self.plot1.set_running(a1)
+        label = "+".join((["AO0/1"] if a0 else []) + (["AO2/3"] if a1 else []))
 
         def _send():
             with self.w._lock:
                 ok = True
-                self.w.load_done.emit("Stopping...")
+                self.w.load_done.emit("Loading...")
                 self.w._put_nowait("WaveGen:Run", 0)  # busy record: never block the CA context
                 import time; time.sleep(0.3)
-
                 ok = self.w._put("WaveGen:NumPoints", num_points) and ok
                 ok = self.w._put("WaveGen:Frequency", freq) and ok
                 ok = self.w._put("WaveGen:MarkerEnable", 1) and ok
                 ok = self.w._put("WaveGen:MarkerWidth", 10) and ok
-
-                if both:
-                    self.w.load_done.emit(f"Sending AO0..3 ({num_points})...")
-                    for ch in range(4):
-                        ok = self.w._put(f"WaveGen:Ch{ch}:UserWF", chans[ch]) and ok
-                        ok = self.w._put(f"WaveGen:Ch{ch}:Amplitude", 1.0) and ok
-                        ok = self.w._put(f"WaveGen:Ch{ch}:Offset", 0.0) and ok
-                        ok = self.w._put(f"WaveGen:Ch{ch}:Enable", 1) and ok
-                else:
-                    self.w.load_done.emit(f"Sending AO0/AO1 ({num_points})...")
-                    ok = self.w._put("WaveGen:Ch0:UserWF", u0) and ok
-                    ok = self.w._put("WaveGen:Ch0:Amplitude", 1.0) and ok
-                    ok = self.w._put("WaveGen:Ch0:Offset", 0.0) and ok
-                    ok = self.w._put("WaveGen:Ch0:Enable", 1) and ok
-                    ok = self.w._put("WaveGen:Ch1:UserWF", v0) and ok
-                    ok = self.w._put("WaveGen:Ch1:Amplitude", 1.0) and ok
-                    ok = self.w._put("WaveGen:Ch1:Offset", 0.0) and ok
-                    ok = self.w._put("WaveGen:Ch1:Enable", 1) and ok
-                    ok = self.w._put("WaveGen:Ch2:Enable", 0) and ok
-                    ok = self.w._put("WaveGen:Ch3:Enable", 0) and ok
-
+                for ch in range(4):
+                    ok = self.w._put(f"WaveGen:Ch{ch}:UserWF", chans[ch]) and ok
+                    ok = self.w._put(f"WaveGen:Ch{ch}:Amplitude", 1.0) and ok
+                    ok = self.w._put(f"WaveGen:Ch{ch}:Offset", 0.0) and ok
+                    ok = self.w._put(f"WaveGen:Ch{ch}:Enable", 1) and ok
                 ok = self.w._put("WaveGen:TriggerSource", self.trig_src.currentIndex()) and ok
                 ok = self.w._put("WaveGen:TriggerEdge", 0) and ok
-
-                if auto_restart and self._is_running and ok:
-                    ok = self.w._put("WaveGen:Continuous", 1) and ok
-                    self.w._put_nowait("WaveGen:Run", 1)  # busy record: never block the CA context
-                    self.w.load_done.emit(f"Running ({num_points} pts)" if ok else "Waveform load failed")
-                else:
-                    self.w.load_done.emit(f"Loaded {num_points} pts. Press Start." if ok else "Waveform load failed")
-        threading.Thread(target=_send, daemon=True).start()
-
-        # Save config after loading
-        self._save_config()
-
-    def _load_pair(self, pair, restart_if_running=False):
-        """Load a single pair's data to IOC. Optionally restart if was running."""
-        u, v, lt = pair.get_output_data()
-        if u is None or v is None:
-            if not restart_if_running:
-                QMessageBox.warning(self, "Missing", f"Load AO{pair.ch_a}/AO{pair.ch_b} pattern first.")
-            return
-        valid, message = self._validate_pair(pair)
-        self.validation_l.setText(message)
-        self.validation_l.setStyleSheet("color:#66bb6a;" if valid else "color:#ef5350;")
-        if not valid:
-            if not restart_if_running:
-                QMessageBox.warning(self, "Invalid waveform setup", message)
-            return
-        freq = 1.0 / lt if lt > 0 else 1.0
-        always_start = not restart_if_running  # Start button always starts
-
-        def _send():
-            with self.w._lock:
-                ok = True
-                # Read the live run-state from the IOC rather than the cached
-                # poll flag, which can be up to 1 s stale and make Apply fail
-                # to restart a pattern that is actually running.
-                was_running = self.w._get("WaveGen:Run", as_string=True) == "Run"
-                should_restart = always_start or (restart_if_running and was_running)
-                self.w.load_done.emit("Stopping...")
-                self.w._put_nowait("WaveGen:Run", 0)  # busy record: never block the CA context
-                import time; time.sleep(0.3)
-                n = len(u)
-                ok = self.w._put("WaveGen:NumPoints", n) and ok
-                ok = self.w._put("WaveGen:Frequency", freq) and ok
-
-                self.w.load_done.emit(f"Sending AO{pair.ch_a} ({n})...")
-                ok = self.w._put(f"WaveGen:Ch{pair.ch_a}:UserWF", u) and ok
-                ok = self.w._put(f"WaveGen:Ch{pair.ch_a}:Amplitude", 1.0) and ok
-                ok = self.w._put(f"WaveGen:Ch{pair.ch_a}:Offset", 0.0) and ok
-                ok = self.w._put(f"WaveGen:Ch{pair.ch_a}:Enable", 1) and ok
-
-                self.w.load_done.emit(f"Sending AO{pair.ch_b} ({n})...")
-                ok = self.w._put(f"WaveGen:Ch{pair.ch_b}:UserWF", v) and ok
-                ok = self.w._put(f"WaveGen:Ch{pair.ch_b}:Amplitude", 1.0) and ok
-                ok = self.w._put(f"WaveGen:Ch{pair.ch_b}:Offset", 0.0) and ok
-                ok = self.w._put(f"WaveGen:Ch{pair.ch_b}:Enable", 1) and ok
-
-                other_channels = [ch for ch in range(4) if ch not in (pair.ch_a, pair.ch_b)]
-                for ch in other_channels:
-                    ok = self.w._put(f"WaveGen:Ch{ch}:Enable", 0) and ok
-
-                ok = self.w._put("WaveGen:TriggerSource", self.trig_src.currentIndex()) and ok
-                ok = self.w._put("WaveGen:TriggerEdge", 0) and ok
-
-                if should_restart and ok:
-                    ok = self.w._put("WaveGen:Continuous", 1) and ok
-                    self.w._put_nowait("WaveGen:Run", 1)  # busy record: never block the CA context
-                    self.w.load_done.emit(
-                        f"Running AO{pair.ch_a}/AO{pair.ch_b} ({n} pts)" if ok else "Waveform load failed")
-                else:
-                    self.w.load_done.emit(f"Loaded {n} pts. Press Start." if ok else "Waveform load failed")
-            # Refresh run-state immediately instead of waiting for the 1 s poll.
+                ok = self.w._put("WaveGen:Continuous", 1) and ok
+                self.w._put_nowait("WaveGen:Run", 1)  # busy record: never block the CA context
+            self.w.load_done.emit(f"Running {label} ({num_points} pts)" if ok else "Waveform load failed")
             self.w.poll_status()
         threading.Thread(target=_send, daemon=True).start()
+        self._save_config()
 
     def _stop(self):
         """Stop output and hold at the coherent position (pattern 0,0 + offset).
@@ -607,6 +551,10 @@ class WaveformTab(QWidget):
         its offset (0*scale + offset = offset). Read the offsets in the GUI
         thread so we don't touch Qt widgets from the worker thread.
         """
+        self.pair0.active = False
+        self.pair1.active = False
+        self.plot0.set_running(False)
+        self.plot1.set_running(False)
         o0u, o0v = self.pair0._get_params()[2:4]
         o1u, o1v = self.pair1._get_params()[2:4]
         offsets = [o0u, o0v, o1u, o1v]  # ch0..ch3
@@ -638,8 +586,8 @@ class WaveformTab(QWidget):
 
     def _on_status(self, text, running, curpt):
         self.status_l.setText(text); self._is_running = running
-        self.plot0.set_running(running)
-        self.plot1.set_running(running)
+        self.plot0.set_running(running and self.pair0.active)
+        self.plot1.set_running(running and self.pair1.active)
         self.w.poll_wavegen_state()
 
     def _on_load_done(self, msg): self.status_l.setText(msg)
