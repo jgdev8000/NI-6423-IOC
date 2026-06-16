@@ -115,19 +115,37 @@ class TestBuildDualPairEdges(unittest.TestCase):
         self.assertIn("10000", r.error)
         self.assertEqual(r.channels, [])
 
-    def test_clamp_below_min_period(self):
-        u0 = _ramp(100)
-        r = build_dual_pair_buffers(u0, u0, 0.05, u0, u0, 0.05)
+    def test_fast_loop_allowed_above_hw_min(self):
+        # 1000 pts at 250 kS/s -> 4 ms hardware minimum; 4 ms must be allowed.
+        u0 = _ramp(1000)
+        r = build_dual_pair_buffers(u0, u0, 0.004, u0, u0, 0.004)
         self.assertTrue(r.ok)
-        self.assertAlmostEqual(r.base_period, 0.1)
-        self.assertEqual(r.ticks, (1, 1))
-        self.assertIn("raised to 0.100s", r.info)
+        self.assertAlmostEqual(r.base_period, 0.004)
+        self.assertAlmostEqual(r.sample_rate, 250000.0)
+        self.assertNotIn("raised", r.info)
 
-    def test_clamp_one_side_changes_ratio(self):
+    def test_clamp_below_hardware_min(self):
+        # 100 pts -> hw min 100/250000 = 0.4 ms; a faster request is raised.
         u0 = _ramp(100)
-        r = build_dual_pair_buffers(u0, u0, 0.05, u0, u0, 0.2)  # 0.05->0.1 base
-        self.assertAlmostEqual(r.base_period, 0.1)
-        self.assertEqual(r.ticks, (1, 2))
+        r = build_dual_pair_buffers(u0, u0, 0.0001, u0, u0, 0.0001)
+        self.assertTrue(r.ok)
+        self.assertAlmostEqual(r.base_period, 100 / 250000.0)
+        self.assertLessEqual(r.sample_rate, 250000.0 + 1e-6)
+        self.assertIn("raised to", r.info)
+
+    def test_no_artificial_01s_floor(self):
+        # 100 pts at 10 ms used to be clamped to 0.1 s; now it must pass through.
+        u0 = _ramp(100)
+        r = build_dual_pair_buffers(u0, u0, 0.01, u0, u0, 0.01)
+        self.assertAlmostEqual(r.base_period, 0.01)
+        self.assertNotIn("raised", r.info)
+
+    def test_max_ao_rate_override(self):
+        # max_ao_rate is configurable; 1000 pts @ 1 MS/s -> 1 ms min.
+        u0 = _ramp(1000)
+        r = build_dual_pair_buffers(u0, u0, 0.001, u0, u0, 0.001, max_ao_rate=1_000_000.0)
+        self.assertTrue(r.ok)
+        self.assertAlmostEqual(r.base_period, 0.001)
 
     def test_equal_period_unequal_points_resamples_and_warns(self):
         u0 = _ramp(100)

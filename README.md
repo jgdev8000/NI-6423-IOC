@@ -223,8 +223,11 @@ AO0:3 share a single hardware sample clock, so the two pairs cannot run at
 arbitrary independent periods. When both pairs are loaded together the UI
 quantizes them to an integer ratio:
 
-- The faster of the two requested loop times becomes the **base period**
-  (minimum 0.1 s, which is also the timing resolution).
+- The faster of the two requested loop times becomes the **base period**.
+  The minimum loop time is set by the hardware, not a fixed floor: a pattern of
+  N points cannot loop faster than `N / AO_max_rate` (the USB-6423 AO clock maxes
+  at 250 kS/s, so e.g. 1000 points -> 4 ms minimum). Faster requests are raised
+  to that hardware minimum and noted in the validation label.
 - The slower pair's period is rounded to the nearest integer multiple of the
   base period: `ticks = round(period / base)` (minimum 1). Its effective
   period is `ticks x base` and is shown in the validation label.
